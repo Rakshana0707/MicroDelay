@@ -31,7 +31,7 @@ import {
   Pie
 } from 'recharts';
 
-const BACKEND_URL = 'http://localhost:8000';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (import.meta.env.PROD ? '' : 'http://localhost:8000');
 
 interface EventTemplate {
   id: number;

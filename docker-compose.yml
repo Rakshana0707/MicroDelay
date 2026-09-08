@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  microdelay:
+    build: .
+    container_name: microdelay_app
+    ports:
+      - "8000:8000"
+    environment:
+      - SECRET_KEY=your_secure_random_string_here
+      - ALLOWED_ORIGINS=*
+    volumes:
+      # Optional: persist the database outside the container
+      - microdelay_data:/app/backend
+
+volumes:
+  microdelay_data:

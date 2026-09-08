@@ -4,7 +4,7 @@ import jwt
 import datetime
 from typing import Optional
 
-SECRET_KEY = "microdelay_development_secret_key_v1"
+SECRET_KEY = os.getenv("SECRET_KEY", "microdelay_development_secret_key_v1")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1440 # 24 hours
 
