@@ -2,12 +2,14 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
+import os
+import json
 import datetime
 import pandas as pd
 from typing import List, Optional
 from pydantic import BaseModel
 
-from database import get_db, init_db, User, Event, DepartureLog
+from database import get_db, init_db, User, Event, DepartureLog, ModelVersionRecord
 import generator
 import models
 import security
@@ -114,6 +116,11 @@ class LogCreateSchema(BaseModel):
     tag_finding_items: bool
     tag_phone_usage: bool
     tag_waiting: bool
+    # Optional directly observed/timed minutes
+    observed_one_last_task_min: Optional[float] = None
+    observed_finding_items_min: Optional[float] = None
+    observed_phone_usage_min: Optional[float] = None
+    observed_waiting_min: Optional[float] = None
 
 class LogSchema(BaseModel):
     id: int
@@ -130,9 +137,28 @@ class LogSchema(BaseModel):
     tag_finding_items: bool
     tag_phone_usage: bool
     tag_waiting: bool
+    # Optional directly observed/timed minutes
+    observed_one_last_task_min: Optional[float] = None
+    observed_finding_items_min: Optional[float] = None
+    observed_phone_usage_min: Optional[float] = None
+    observed_waiting_min: Optional[float] = None
+    provenance: Optional[str] = "unknown"
+    data_source: Optional[str] = "unknown"
+    is_synthetic: Optional[bool] = False
+    recorded_at: Optional[str] = None
+    observation_status: Optional[str] = "valid"
 
     class Config:
         from_attributes = True
+
+class IntelligencePredictRequestSchema(BaseModel):
+    event_name: str
+    day_of_week: str
+    importance: str = "medium"
+    bag_prepared: bool = False
+    estimated_prep_duration: float = 30.0
+    estimated_travel_duration: float = 20.0
+    event_id: Optional[int] = None
 
 # Authentication Endpoints
 @app.post("/api/auth/register", response_model=AuthTokenSchema)
@@ -244,8 +270,86 @@ def get_logs(current_user: User = Depends(get_current_user), db: Session = Depen
     return db.query(DepartureLog).filter(DepartureLog.user_id == current_user.id).order_by(DepartureLog.date.desc(), DepartureLog.id.desc()).all()
 
 @app.get("/api/metrics")
-def get_metrics(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return models.train_and_evaluate(db, current_user.id)
+def get_metrics(
+    training_mode: Optional[str] = "auto",
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    return models.train_and_evaluate(db, current_user.id, training_mode=training_mode)
+
+@app.get("/api/benchmarks")
+def get_benchmarks(
+    training_mode: Optional[str] = "auto",
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Run reproducible multi-algorithm benchmark for authenticated user."""
+    return models.benchmark_user_models(db, current_user.id, training_mode=training_mode)
+
+@app.get("/api/reports/latest")
+def get_latest_report(
+    provenance: Optional[str] = "synthetic",
+    current_user: User = Depends(get_current_user)
+):
+    """Fetch the latest evaluation report (JSON format) for the authenticated user."""
+    from ml.reporting import REAL_REPORTS_DIR, SYNTHETIC_REPORTS_DIR
+    target_dir = REAL_REPORTS_DIR if provenance == "real" else SYNTHETIC_REPORTS_DIR
+    latest_file = os.path.join(target_dir, f"latest_user_{current_user.id}.json")
+    if not os.path.exists(latest_file):
+        raise HTTPException(status_code=404, detail="No evaluation report found for user.")
+    with open(latest_file, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+@app.get("/api/data-summary")
+def get_data_summary(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Return data provenance statistics and model status for the authenticated user."""
+    counts = models.get_user_data_counts(db, current_user.id)
+    status_info = models.get_model_status(current_user.id, db=db)
+    return {
+        **counts,
+        "active_model": status_info
+    }
+
+@app.get("/api/models/versions")
+def get_user_model_versions(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Retrieve all model versions and statuses for the authenticated user."""
+    records = db.query(ModelVersionRecord).filter(
+        ModelVersionRecord.user_id == current_user.id
+    ).order_by(ModelVersionRecord.id.desc()).all()
+    
+    return [
+        {
+            "id": r.id,
+            "model_id": r.model_id,
+            "model_version": r.model_version,
+            "model_type": r.model_type,
+            "training_data_source": r.training_data_source,
+            "training_samples": r.training_samples,
+            "training_started_at": r.training_started_at,
+            "training_completed_at": r.training_completed_at,
+            "validation_mae": r.validation_mae,
+            "test_mae": r.test_mae,
+            "model_status": r.model_status,
+            "is_active": r.is_active,
+            "status_reason": r.status_reason,
+            "created_at": r.training_started_at
+        }
+        for r in records
+    ]
+
+@app.post("/api/models/rollback")
+def rollback_model_version(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Rollback to the most recent archived model version for the authenticated user."""
+    res = models.rollback_user_model(db, current_user.id)
+    if not res["success"]:
+        raise HTTPException(status_code=400, detail=res["message"])
+    return res
 
 @app.get("/api/predict")
 def predict_delay(
@@ -255,7 +359,8 @@ def predict_delay(
     bag_prepared: bool,
     estimated_prep: float,
     estimated_travel: float,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     return models.predict_micro_delay(
         user_id=current_user.id,
@@ -264,8 +369,67 @@ def predict_delay(
         importance=importance,
         bag_prepared=bag_prepared,
         estimated_prep_duration_min=estimated_prep,
-        estimated_travel_duration_min=estimated_travel
+        estimated_travel_duration_min=estimated_travel,
+        db=db
     )
+
+@app.get("/api/intelligence/predict")
+def predict_adaptive_intelligence_get(
+    event_name: str,
+    day_of_week: str,
+    importance: str = "medium",
+    bag_prepared: bool = False,
+    estimated_prep: float = 30.0,
+    estimated_travel: float = 20.0,
+    event_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Unified Adaptive Intelligence Prediction endpoint (GET)."""
+    try:
+        from ml.adaptive import PredictionContext, AdaptiveIntelligenceOrchestrator
+    except ModuleNotFoundError:
+        from backend.ml.adaptive import PredictionContext, AdaptiveIntelligenceOrchestrator
+
+    ctx = PredictionContext(
+        user_id=current_user.id,
+        event_name=event_name,
+        day_of_week=day_of_week,
+        event_importance=importance,
+        estimated_prep_duration=estimated_prep,
+        estimated_travel_duration=estimated_travel,
+        bag_prepared=bag_prepared,
+        event_id=event_id
+    )
+    orchestrator = AdaptiveIntelligenceOrchestrator()
+    output = orchestrator.predict(ctx, db=db)
+    return output.to_dict()
+
+@app.post("/api/intelligence/predict")
+def predict_adaptive_intelligence_post(
+    req: IntelligencePredictRequestSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Unified Adaptive Intelligence Prediction endpoint (POST)."""
+    try:
+        from ml.adaptive import PredictionContext, AdaptiveIntelligenceOrchestrator
+    except ModuleNotFoundError:
+        from backend.ml.adaptive import PredictionContext, AdaptiveIntelligenceOrchestrator
+
+    ctx = PredictionContext(
+        user_id=current_user.id,
+        event_name=req.event_name,
+        day_of_week=req.day_of_week,
+        event_importance=req.importance,
+        estimated_prep_duration=req.estimated_prep_duration,
+        estimated_travel_duration=req.estimated_travel_duration,
+        bag_prepared=req.bag_prepared,
+        event_id=req.event_id
+    )
+    orchestrator = AdaptiveIntelligenceOrchestrator()
+    output = orchestrator.predict(ctx, db=db)
+    return output.to_dict()
 
 @app.post("/api/checkout")
 def create_checkout_log(
@@ -288,52 +452,43 @@ def create_checkout_log(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid time format. Error: {e}")
 
-    # Checked delay tags
-    checked_tags = []
-    if log_in.tag_one_last_task:
-        checked_tags.append("one_last_task")
-    if log_in.tag_finding_items:
-        checked_tags.append("finding_items")
-    if log_in.tag_phone_usage:
-        checked_tags.append("phone_usage")
-    if log_in.tag_waiting:
-        checked_tags.append("waiting")
+    # Attribute delay using explainable DelayAttributionEngine
+    observed_durations = {}
+    if getattr(log_in, "observed_one_last_task_min", None) is not None:
+        observed_durations["one_last_task"] = float(log_in.observed_one_last_task_min)
+    if getattr(log_in, "observed_finding_items_min", None) is not None:
+        observed_durations["finding_items"] = float(log_in.observed_finding_items_min)
+    if getattr(log_in, "observed_phone_usage_min", None) is not None:
+        observed_durations["phone_usage"] = float(log_in.observed_phone_usage_min)
+    if getattr(log_in, "observed_waiting_min", None) is not None:
+        observed_durations["waiting"] = float(log_in.observed_waiting_min)
 
-    allocated_one_last = 0.0
-    allocated_finding = 0.0
-    allocated_phone = 0.0
-    allocated_waiting = 0.0
-    allocated_prep_bias = 0.0
+    tags = {
+        "one_last_task": bool(log_in.tag_one_last_task),
+        "finding_items": bool(log_in.tag_finding_items),
+        "phone_usage": bool(log_in.tag_phone_usage),
+        "waiting": bool(log_in.tag_waiting)
+    }
 
-    if pos_delay > 0:
-        if not checked_tags:
-            allocated_prep_bias = pos_delay
-        else:
-            # Custom default allocation weight ratios
-            weights = {
-                "one_last_task": 6.0,
-                "finding_items": 5.0,
-                "phone_usage": 3.0,
-                "waiting": 4.0
-            }
-            active_weights = {tag: weights[tag] for tag in checked_tags}
-            total_weight = sum(active_weights.values())
-            
-            for tag in checked_tags:
-                allocated = (active_weights[tag] / total_weight) * pos_delay
-                if tag == "one_last_task":
-                    allocated_one_last = round(allocated, 2)
-                elif tag == "finding_items":
-                    allocated_finding = round(allocated, 2)
-                elif tag == "phone_usage":
-                    allocated_phone = round(allocated, 2)
-                elif tag == "waiting":
-                    allocated_waiting = round(allocated, 2)
-            
-            total_allocated = allocated_one_last + allocated_finding + allocated_phone + allocated_waiting
-            remainder = pos_delay - total_allocated
-            allocated_prep_bias = round(max(0.0, remainder), 2)
-            
+    try:
+        from ml.attribution import DelayAttributionEngine
+    except ModuleNotFoundError:
+        from backend.ml.attribution import DelayAttributionEngine
+
+    attribution_result = DelayAttributionEngine.attribute_departure(
+        total_delay_min=total_delay_min,
+        actual_prep_duration_min=log_in.actual_prep_duration_min,
+        estimated_prep_duration_min=log_in.estimated_prep_duration_min,
+        tags=tags,
+        observed_durations=observed_durations
+    )
+    legacy_allocated = attribution_result.get_legacy_allocated_dict()
+    allocated_one_last = legacy_allocated["delay_one_last_task_min"]
+    allocated_finding = legacy_allocated["delay_finding_items_min"]
+    allocated_phone = legacy_allocated["delay_phone_usage_min"]
+    allocated_waiting = legacy_allocated["delay_waiting_min"]
+    allocated_prep_bias = legacy_allocated["delay_prep_bias_min"]
+
     db_log = DepartureLog(
         user_id=current_user.id,
         event_id=log_in.event_id,
@@ -359,27 +514,38 @@ def create_checkout_log(
         delay_finding_items_min=allocated_finding,
         delay_phone_usage_min=allocated_phone,
         delay_waiting_min=allocated_waiting,
-        delay_prep_bias_min=allocated_prep_bias
+        delay_prep_bias_min=allocated_prep_bias,
+        attribution_metadata=attribution_result.to_json(),
+        provenance="real",
+        data_source="simulator_checkout",
+        is_synthetic=False,
+        recorded_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        observation_status="valid"
     )
     
     db.add(db_log)
     db.commit()
     db.refresh(db_log)
     
-    # Retrain this user's custom ML model
-    models.train_and_evaluate(db, current_user.id)
+    # Retrain this user's custom ML model using auto provenance resolution
+    retrain_res = models.train_and_evaluate(db, current_user.id, training_mode="auto")
     
     return {
         "success": True,
         "log_id": db_log.id,
         "calculated_delay_min": total_delay_min,
+        "provenance": "real",
+        "is_synthetic": False,
         "allocations": {
             "one_last_task": allocated_one_last,
             "finding_items": allocated_finding,
             "phone_usage": allocated_phone,
             "waiting": allocated_waiting,
             "prep_bias": allocated_prep_bias
-        }
+        },
+        "model_retrained": retrain_res.get("success", False),
+        "training_mode": retrain_res.get("training_mode", "auto"),
+        "is_personalized_real": retrain_res.get("is_personalized_real", False)
     }
 
 @app.get("/api/insights")
@@ -431,6 +597,43 @@ def get_insights(current_user: User = Depends(get_current_user), db: Session = D
     delay_percentages = {}
     for key, val in delay_sums.items():
         delay_percentages[key] = round((val / total_allocated_delay) * 100, 1) if total_allocated_delay > 0 else 0.0
+
+    # Structured Observed vs. Estimated Attribution
+    observed_contributions = {}
+    estimated_contributions = {}
+    total_observed_all = 0.0
+    total_estimated_all = 0.0
+    total_unexplained_all = 0.0
+
+    try:
+        from ml.attribution import DelayAttributionEngine
+    except ModuleNotFoundError:
+        from backend.ml.attribution import DelayAttributionEngine
+
+    for log_obj in logs:
+        attr_res = DelayAttributionEngine.parse_legacy_record(log_obj)
+        total_observed_all += attr_res.total_observed_min
+        total_estimated_all += attr_res.total_estimated_min
+        total_unexplained_all += attr_res.unexplained_residual_min
+        for cat in attr_res.categories:
+            if cat.attribution_type == "observed":
+                observed_contributions[cat.category] = observed_contributions.get(cat.category, 0.0) + cat.departure_impact_min
+            else:
+                estimated_contributions[cat.category] = estimated_contributions.get(cat.category, 0.0) + cat.departure_impact_min
+
+    pos_lateness = float(total_minutes_lost)
+    completeness = round(min(100.0, ((total_observed_all + total_estimated_all) / pos_lateness * 100.0)), 1) if pos_lateness > 0 else 100.0
+
+    attribution_summary = {
+        "total_actual_lateness_min": round(pos_lateness, 1),
+        "observed_delay_contributions": {k: round(v, 1) for k, v in observed_contributions.items()},
+        "estimated_contributions": {k: round(v, 1) for k, v in estimated_contributions.items()},
+        "unexplained_delay_min": round(total_unexplained_all, 1),
+        "total_observed_min": round(total_observed_all, 1),
+        "total_estimated_min": round(total_estimated_all, 1),
+        "attribution_completeness_pct": completeness,
+        "scientific_disclaimer": "Observed contributions represent directly timed or measured intervals. Estimated contributions are model/heuristic allocations and do not represent isolated causal experiments."
+    }
 
     # Segregate calculations by profile for targeted recommendations
     recommendations = []
@@ -536,9 +739,25 @@ def get_insights(current_user: User = Depends(get_current_user), db: Session = D
             "impact": f"Saves {round(personal_prep_bias, 1)} minutes of commute stress."
         })
 
+    counts = models.get_user_data_counts(db, current_user.id)
+
     return {
         "has_data": True,
         "total_logs": len(df),
+        "is_synthetic_demonstration": counts["real_samples"] == 0,
+        "real_samples": counts["real_samples"],
+        "synthetic_samples": counts["synthetic_samples"],
+        "total_samples": counts["total_samples"],
+        "data_provenance": "real" if counts["real_samples"] >= 8 else ("synthetic" if counts["real_samples"] == 0 else "mixed_insufficient_real"),
+        "provenance_notice": (
+            "Verified Personal Profile: Derived from your genuine departure routines."
+            if counts["real_samples"] >= 8
+            else (
+                "Demonstration Profile: Based on 60 days of pre-seeded persona data. Track actual morning departures to calibrate your personal profile."
+                if counts["real_samples"] == 0
+                else f"Early Calibration Phase: {counts['real_samples']}/8 genuine routines recorded. Personal model will activate after 8 real departures."
+            )
+        ),
         "lateness_rate_pct": round(lateness_rate * 100, 1),
         "total_minutes_lost": round(float(total_minutes_lost), 1),
         "personal_prep_bias_min": round(float(personal_prep_bias), 1),
@@ -546,6 +765,7 @@ def get_insights(current_user: User = Depends(get_current_user), db: Session = D
         "avg_actual_prep_min": round(float(avg_actual_prep), 1),
         "delay_sums": delay_sums,
         "delay_percentages": delay_percentages,
+        "attribution_summary": attribution_summary,
         "recommendations": recommendations
     }
 

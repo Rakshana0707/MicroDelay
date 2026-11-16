@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pkl
+
+# Environments
+.env
+.venv
+venv/
+ENV/
+
+# Testing & Cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+
+# SQLite (keep local database uncommitted unless explicitly tracked)
+*.db-journal
+
+# ML Artifacts & Generated Reports
+backend/models/versions/
+backend/reports/
+backend/models/*.pkl

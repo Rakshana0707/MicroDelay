@@ -1,7 +1,7 @@
 import datetime
 import random
 from sqlalchemy.orm import Session
-from database import Event, DepartureLog, User
+from database import Event, DepartureLog, User, DataProvenance, DataSource, ObservationStatus
 
 # Profile-specific schedules
 PROFILE_SCHEDULES = {
@@ -82,8 +82,11 @@ def generate_user_logs(db: Session, user_id: int, num_days: int = 60):
     # 1. Seed events for this user
     seed_user_events(db, user_id, profile)
     
-    # Clean previous logs for this user (to reload clean)
-    db.query(DepartureLog).filter(DepartureLog.user_id == user_id).delete()
+    # Clean previous synthetic demonstration logs for this user (preserve real observations!)
+    db.query(DepartureLog).filter(
+        DepartureLog.user_id == user_id,
+        DepartureLog.is_synthetic == True
+    ).delete()
     db.commit()
     
     events = db.query(Event).filter(Event.user_id == user_id).all()
@@ -294,7 +297,12 @@ def generate_user_logs(db: Session, user_id: int, num_days: int = 60):
                 delay_finding_items_min=round(allocated_finding, 2),
                 delay_phone_usage_min=round(allocated_phone, 2),
                 delay_waiting_min=round(allocated_waiting, 2),
-                delay_prep_bias_min=round(allocated_prep_bias, 2)
+                delay_prep_bias_min=round(allocated_prep_bias, 2),
+                provenance=DataProvenance.SYNTHETIC.value,
+                data_source=DataSource.GENERATOR.value,
+                is_synthetic=True,
+                recorded_at=actual_departure_dt.isoformat() + "Z",
+                observation_status=ObservationStatus.VALID.value
             )
             db.add(log)
             logged_count += 1
