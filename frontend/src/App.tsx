@@ -15,7 +15,9 @@ import {
   LogOut,
   Briefcase,
   Mic,
-  MicOff
+  MicOff,
+  Plus,
+  Trash2
 } from 'lucide-react';
 import {
   AreaChart,
@@ -134,7 +136,7 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
 
   // Tab State
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'comparison' | 'history'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'comparison' | 'history' | 'routines'>('dashboard');
   
   // Data States
   const [events, setEvents] = useState<EventTemplate[]>([]);
@@ -177,6 +179,14 @@ export default function App() {
   const [isListening, setIsListening] = useState<boolean>(false);
   const [voiceText, setVoiceText] = useState<string>('');
   const [voiceFeedback, setVoiceFeedback] = useState<string>('');
+
+  // Routine Builder States
+  const [newEventName, setNewEventName] = useState('');
+  const [newEventDay, setNewEventDay] = useState('Monday');
+  const [newEventStart, setNewEventStart] = useState('09:00');
+  const [newEventPrep, setNewEventPrep] = useState(30);
+  const [newEventTravel, setNewEventTravel] = useState(15);
+  const [newEventImportance, setNewEventImportance] = useState('medium');
 
   const startVoiceAssistant = (stage: 'idle' | 'preparing' | 'checkout') => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -446,6 +456,52 @@ export default function App() {
     setIsRefreshing(true);
     await fetchData();
     setIsRefreshing(false);
+  };
+
+  // Routine Builder Handlers
+  const handleCreateEvent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: newEventName,
+          day_of_week: newEventDay,
+          start_time: newEventStart,
+          estimated_prep_duration: newEventPrep,
+          estimated_travel_duration: newEventTravel,
+          importance: newEventImportance
+        })
+      });
+      if (!res.ok) throw new Error('Failed to create event');
+      await fetchData();
+      setNewEventName('');
+      alert('Routine created successfully!');
+    } catch (err: any) {
+      alert('Error creating routine.');
+    }
+  };
+
+  const handleDeleteEvent = async (id: number) => {
+    if (!token) return;
+    if (!confirm('Are you sure you want to delete this routine?')) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/events/${id}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (!res.ok) throw new Error('Failed to delete event');
+      await fetchData();
+    } catch (err: any) {
+      alert('Error deleting routine.');
+    }
   };
 
   // Auth Handlers
@@ -903,6 +959,13 @@ export default function App() {
             >
               <History size={16} />
               Log History
+            </button>
+            <button 
+              className={`tab-btn ${activeTab === 'routines' ? 'active' : ''}`}
+              onClick={() => setActiveTab('routines')}
+            >
+              <Briefcase size={16} />
+              Routines
             </button>
           </div>
         </div>
@@ -1624,6 +1687,101 @@ export default function App() {
                     )}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'routines' && (
+            <div className="tab-pane active" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+              <div className="card">
+                <div className="card-header">
+                  <h3 className="card-title">
+                    <Briefcase />
+                    My Routines
+                  </h3>
+                  <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Manage your daily schedules</span>
+                </div>
+                <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  {events.map((evt) => (
+                    <div key={evt.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                      <div>
+                        <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.25rem' }}>{evt.name}</div>
+                        <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                          {evt.day_of_week}s at {evt.start_time.substring(0, 5)} • {evt.estimated_prep_duration}m prep • {evt.estimated_travel_duration}m travel
+                        </div>
+                      </div>
+                      <button 
+                        className="btn-secondary" 
+                        style={{ padding: '0.5rem', color: 'var(--accent-danger)' }}
+                        onClick={() => handleDeleteEvent(evt.id)}
+                        title="Delete Routine"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
+                  {events.length === 0 && (
+                    <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>No routines defined.</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="card">
+                <div className="card-header">
+                  <h3 className="card-title">
+                    <Plus />
+                    Create New Routine
+                  </h3>
+                </div>
+                <form onSubmit={handleCreateEvent} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
+                  <div className="form-group">
+                    <label className="form-label">Routine Name</label>
+                    <input type="text" className="form-input" required value={newEventName} onChange={e => setNewEventName(e.target.value)} placeholder="e.g. Gym Session, Work Commute" />
+                  </div>
+                  
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                    <div className="form-group">
+                      <label className="form-label">Day of Week</label>
+                      <select className="form-select" value={newEventDay} onChange={e => setNewEventDay(e.target.value)}>
+                        <option value="Monday">Monday</option>
+                        <option value="Tuesday">Tuesday</option>
+                        <option value="Wednesday">Wednesday</option>
+                        <option value="Thursday">Thursday</option>
+                        <option value="Friday">Friday</option>
+                        <option value="Saturday">Saturday</option>
+                        <option value="Sunday">Sunday</option>
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Target Arrival Time</label>
+                      <input type="time" className="form-input" required value={newEventStart} onChange={e => setNewEventStart(e.target.value)} />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                    <div className="form-group">
+                      <label className="form-label">Est. Prep Time (mins)</label>
+                      <input type="number" className="form-input" required min={1} value={newEventPrep} onChange={e => setNewEventPrep(Number(e.target.value))} />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Est. Travel Time (mins)</label>
+                      <input type="number" className="form-input" required min={1} value={newEventTravel} onChange={e => setNewEventTravel(Number(e.target.value))} />
+                    </div>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Importance</label>
+                    <select className="form-select" value={newEventImportance} onChange={e => setNewEventImportance(e.target.value)}>
+                      <option value="low">Low (Flexible)</option>
+                      <option value="medium">Medium (Standard)</option>
+                      <option value="high">High (Must be on time)</option>
+                    </select>
+                  </div>
+
+                  <button type="submit" className="btn-primary" style={{ marginTop: '0.5rem' }}>
+                    Save Routine
+                  </button>
+                </form>
               </div>
             </div>
           )}

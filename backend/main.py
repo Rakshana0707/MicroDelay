@@ -86,6 +86,15 @@ class EventSchema(BaseModel):
     class Config:
         from_attributes = True
 
+class EventCreateSchema(BaseModel):
+    name: str
+    day_of_week: str
+    start_time: str
+    estimated_prep_duration: int
+    estimated_travel_duration: int
+    importance: str
+
+
 class LogCreateSchema(BaseModel):
     event_id: Optional[int] = None
     event_name: str
@@ -204,6 +213,31 @@ def login_user(user_in: UserLoginSchema, db: Session = Depends(get_db)):
 @app.get("/api/events", response_model=List[EventSchema])
 def get_events(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return db.query(Event).filter(Event.user_id == current_user.id).all()
+
+@app.post("/api/events", response_model=EventSchema)
+def create_event(event_in: EventCreateSchema, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    new_event = Event(
+        user_id=current_user.id,
+        name=event_in.name,
+        day_of_week=event_in.day_of_week,
+        start_time=event_in.start_time,
+        estimated_prep_duration=event_in.estimated_prep_duration,
+        estimated_travel_duration=event_in.estimated_travel_duration,
+        importance=event_in.importance
+    )
+    db.add(new_event)
+    db.commit()
+    db.refresh(new_event)
+    return new_event
+
+@app.delete("/api/events/{event_id}")
+def delete_event(event_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    event = db.query(Event).filter(Event.id == event_id, Event.user_id == current_user.id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    db.delete(event)
+    db.commit()
+    return {"message": "Event deleted successfully"}
 
 @app.get("/api/logs", response_model=List[LogSchema])
 def get_logs(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
