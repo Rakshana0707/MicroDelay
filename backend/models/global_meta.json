@@ -1,7 +1,7 @@
 {
-  "global_model_version": "global_ran_20261117_032142",
+  "global_model_version": "global_ran_20261117_033524",
   "model_type": "RandomForestRegressor",
-  "trained_at": "2026-11-17T03:21:42.117121+00:00",
+  "trained_at": "2026-11-17T03:35:24.814900+00:00",
   "cohort_users_count": 2,
   "cohort_samples_count": 12,
   "train_samples": 8,

@@ -550,6 +550,31 @@ def get_leave_users_out_benchmark_endpoint(
     """Run and return the leave-users-out evaluation experiment across all consented genuine users."""
     return models.get_leave_users_out_benchmark(db)
 
+# Behavioral Habit Discovery & Clustering Endpoints (Prompt 2.4)
+@app.get("/api/intelligence/clusters/profile")
+def get_user_cluster_profile_endpoint(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Fetch current user's behavioral cluster profile, habit characteristics, and historical comparison."""
+    return models.get_user_cluster_profile(db, current_user.id)
+
+@app.post("/api/intelligence/clusters/train")
+def train_cluster_models_endpoint(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Train unsupervised clustering tournament across genuine history and update all user profiles."""
+    return models.train_cluster_models(db)
+
+@app.get("/api/intelligence/clusters/benchmark")
+def get_clustering_benchmark_endpoint(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Fetch comparative benchmarking metrics across K-Means, Agglomerative, and DBSCAN algorithms."""
+    return models.get_clustering_benchmark(db)
+
 @app.post("/api/intelligence/predict")
 def predict_adaptive_intelligence_post(
     req: IntelligencePredictRequestSchema,

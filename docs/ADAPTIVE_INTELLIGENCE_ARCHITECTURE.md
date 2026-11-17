@@ -281,4 +281,66 @@ To prove that global models generalize to unseen individuals without demographic
 - `GET /api/benchmarks/leave-users-out`: Retrieve out-of-sample transferability and group cross-validation results.
 - `frontend/src/App.tsx`: Real-time lifecycle badge, maturity progress meter ($N_{\text{real}}/8$), dynamic hybrid blending breakdown bar, cohort benchmarking table, and privacy consent controls.
 
+---
+
+## 8. Behavioral Habit Discovery & Clustering Engine (Prompt 2.4)
+
+### 8.1 Objective & Paradigm Shift
+Rather than relying exclusively on predefined demographic personas (e.g. "student" or "software engineer"), MicroDelay 2.0 introduces an unsupervised habit discovery engine that clusters recurring behavioral signatures directly from genuine historical observations.
+
+### 8.2 Standard 12-Dimensional Behavioral Feature Space
+User-level behavioral feature vectors are extracted chronologically without lookahead leakage:
+1. `average_prep_duration`: Mean actual preparation time in minutes.
+2. `average_prep_bias`: Mean planning bias ($\text{actual\_prep} - \text{estimated\_prep}$).
+3. `average_departure_delay`: Mean delay relative to scheduled leave time.
+4. `lateness_rate`: Proportion of departures resulting in delay ($> 0.0$m).
+5. `phone_distraction_frequency`: Proportion of departures interrupted by phone or notifications.
+6. `item_search_frequency`: Proportion of departures delayed searching for keys, badges, or essentials.
+7. `last_minute_task_frequency`: Proportion of departures delayed by "one last task" right at door.
+8. `bag_prepared_percentage`: Proportion of mornings with materials prepared the night before.
+9. `average_travel_error`: Mean estimation error for travel/commute buffer.
+10. `weekday_delay_variation`: Standard deviation of delays across days of the week.
+11. `preparation_duration_variability`: Standard deviation of actual preparation time.
+12. `recent_behavior_change`: Delay difference between recent 5 checkouts versus older baseline.
+
+### 8.3 Unsupervised Clustering Tournament & Selection
+The engine evaluates and compares three clustering families over standardized feature vectors (`StandardScaler`):
+- **K-Means:** $k \in [2, 5]$, minimizing inertia with orthogonal initialization (`n_init=10`).
+- **Agglomerative Hierarchical Clustering:** Ward's minimum variance criterion over candidate $k$.
+- **DBSCAN:** Density-based clustering with adaptive epsilon sweeps to identify non-spherical clusters and isolate noise.
+
+Model selection is strictly evidence-based, ranking candidates using:
+- **Silhouette Score ($S \in [-1, 1]$):** Cluster cohesion and separation.
+- **Davies-Bouldin Index ($DB \ge 0$):** Ratio of within-cluster distance to between-cluster distance (lower is better).
+- **Size Distribution Balance:** Penalizes degenerate singletons or extreme skew.
+
+### 8.4 Evidence-Based Dynamic Interpretation Service
+Cluster assignments are never hardcoded by cluster ID numbers. The `ClusterInterpretationService` dynamically projects centroids back into interpretable feature units, computes $z$-scores relative to the population mean ($\mathbf{\mu}_{\text{pop}}, \mathbf{\sigma}_{\text{pop}}$), and synthesizes evidence-based habit labels:
+- **Consistently Prepared Routine:** High overnight bag preparedness ($\ge 70\%$), low departure delay ($\le 1.5$m), minimal distractions.
+- **Phone-Interrupted Preparation:** Dominant phone distraction frequency ($\ge 30\%$).
+- **Frequent Item-Search Delays:** Dominant item searching at departure door ($\ge 30\%$).
+- **Last-Minute Task Driven:** High "one last task" delays at scheduled leave deadline ($\ge 30\%$).
+- **Preparation Underestimation Bias:** Planning fallacy where actual prep exceeds planned by $\ge 3.0$m.
+- **Travel-Time Optimism:** Commute buffer underestimated by $\ge 3.0$m.
+- **Inconsistent Routine Timeline:** Volatile prep duration variability ($\ge 6.0$m).
+- **Standard Variable Routine:** Balanced baseline variance.
+
+### 8.5 Lifecycle Sufficiency & Historical Profile Evolution
+- **Sufficiency States:**
+  - `insufficient_data`: $< 3$ observations. Baseline guidance provided.
+  - `gathering_history`: $3 \le N < 8$ observations. Provisional habit cluster assigned.
+  - `sufficient`: $\ge 8$ observations. Fully mature behavioral habit profile.
+- **Nearest Centroid Assignment:** Unseen users and algorithms without natural inference methods (Agglomerative) are mapped via Euclidean distance to the closest standardized centroid.
+- **Historical Comparison & Trend Tracking:** Profiles are versioned in `user_cluster_profiles` with timestamps. Successive generations evaluate:
+  - Habit shifts (e.g. "Shifted from Preparation Underestimation to Consistently Prepared").
+  - Delay delta ($\Delta \text{delay}$) and trend classification (`improving`, `regressing`, `stable`).
+  - Recent behavior change metrics.
+
+### 8.6 API & Frontend Visualizations
+- `GET /api/intelligence/clusters/profile`: Current user's behavioral profile, supporting stats, and trend comparison.
+- `POST /api/intelligence/clusters/train`: Triggers clustering tournament across genuine records and persists artifacts.
+- `GET /api/intelligence/clusters/benchmark`: Comparative benchmark metrics across K-Means, Agglomerative, and DBSCAN.
+- `frontend/src/App.tsx`: Real-time Discovered Behavioral Habit card on Dashboard, metric comparison grid (User vs Population), trend badge, and Tournament Benchmark matrix on Model Intelligence tab.
+
+
 

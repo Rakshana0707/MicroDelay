@@ -76,6 +76,22 @@ except ModuleNotFoundError:
         GlobalModelManager
     )
 try:
+    from ml.habit_discovery import (
+        BEHAVIORAL_FEATURE_NAMES,
+        extract_user_behavioral_features,
+        ClusterInterpretationService,
+        BehavioralClusteringTournament,
+        HabitDiscoveryService
+    )
+except ModuleNotFoundError:
+    from backend.ml.habit_discovery import (
+        BEHAVIORAL_FEATURE_NAMES,
+        extract_user_behavioral_features,
+        ClusterInterpretationService,
+        BehavioralClusteringTournament,
+        HabitDiscoveryService
+    )
+try:
     from ml.adaptive import (
         PredictionContext,
         AdaptiveIntelligenceOutput,
@@ -143,5 +159,10 @@ __all__ = [
     "LatenessClassifierManager",
     "ClassificationEvaluationMetrics",
     "GlobalCohortConfig",
-    "GlobalModelManager"
+    "GlobalModelManager",
+    "BEHAVIORAL_FEATURE_NAMES",
+    "extract_user_behavioral_features",
+    "ClusterInterpretationService",
+    "BehavioralClusteringTournament",
+    "HabitDiscoveryService"
 ]

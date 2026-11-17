@@ -843,3 +843,34 @@ def update_user_consent(db: Session, user_id: int, consent: bool) -> dict:
     }
 
 
+def get_user_cluster_profile(db: Session, user_id: int) -> dict:
+    """Fetch or generate behavioral habit cluster profile for user."""
+    try:
+        from ml.habit_discovery import HabitDiscoveryService
+    except ModuleNotFoundError:
+        from backend.ml.habit_discovery import HabitDiscoveryService
+
+    return HabitDiscoveryService.get_or_create_user_profile(user_id, db)
+
+
+def train_cluster_models(db: Session) -> dict:
+    """Run tournament clustering across genuine observations and persist active clusters."""
+    try:
+        from ml.habit_discovery import HabitDiscoveryService
+    except ModuleNotFoundError:
+        from backend.ml.habit_discovery import HabitDiscoveryService
+
+    return HabitDiscoveryService.train_and_persist_clusters(db)
+
+
+def get_clustering_benchmark(db: Session) -> dict:
+    """Retrieve comparative benchmark report across K-Means, Agglomerative, and DBSCAN."""
+    try:
+        from ml.habit_discovery import HabitDiscoveryService
+    except ModuleNotFoundError:
+        from backend.ml.habit_discovery import HabitDiscoveryService
+
+    return HabitDiscoveryService.get_clustering_benchmark_report(db)
+
+
+

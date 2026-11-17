@@ -148,6 +148,27 @@ class ModelVersionRecord(Base):
     user = relationship("User", backref="model_versions")
 
 
+class UserClusterProfile(Base):
+    __tablename__ = "user_cluster_profiles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    cluster_id = Column(Integer, nullable=False)
+    cluster_name = Column(String, nullable=False)
+    cluster_description = Column(Text, nullable=False)
+    dominant_characteristics = Column(Text, nullable=False)  # JSON list
+    user_features = Column(Text, nullable=False)  # JSON dict
+    cluster_centroid = Column(Text, nullable=False)  # JSON dict
+    population_mean = Column(Text, nullable=False)  # JSON dict
+    data_sufficiency_status = Column(String, nullable=False)  # sufficient, gathering_history, insufficient_data
+    sample_count = Column(Integer, nullable=False)
+    provenance = Column(String, default="real", nullable=False)  # real, synthetic
+    cluster_model_version = Column(String, nullable=False)
+    generated_at = Column(String, nullable=False)
+
+    user = relationship("User", backref="cluster_profiles")
+
+
 def migrate_db(db_engine=None):
     """Safely migrate SQLite database schema to include provenance fields and backfill legacy records."""
     target_engine = db_engine or engine
@@ -217,6 +238,26 @@ def migrate_db(db_engine=None):
                 is_active BOOLEAN NOT NULL DEFAULT 0,
                 status_reason TEXT,
                 metrics_json TEXT
+            )
+        """))
+
+        # Create user_cluster_profiles table if not present
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS user_cluster_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                cluster_id INTEGER NOT NULL,
+                cluster_name VARCHAR NOT NULL,
+                cluster_description TEXT NOT NULL,
+                dominant_characteristics TEXT NOT NULL,
+                user_features TEXT NOT NULL,
+                cluster_centroid TEXT NOT NULL,
+                population_mean TEXT NOT NULL,
+                data_sufficiency_status VARCHAR NOT NULL,
+                sample_count INTEGER NOT NULL,
+                provenance VARCHAR NOT NULL DEFAULT 'real',
+                cluster_model_version VARCHAR NOT NULL,
+                generated_at VARCHAR NOT NULL
             )
         """))
 

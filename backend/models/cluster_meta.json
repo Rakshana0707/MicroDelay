@@ -1,0 +1,169 @@
+{
+  "cluster_model_version": "cluster_20261117_033510",
+  "trained_at": "2026-11-17T03:35:10.742680+00:00",
+  "algorithm": "K-Means",
+  "optimal_k": 2,
+  "silhouette_score": 0.108,
+  "davies_bouldin_index": 0.455,
+  "total_users_clustered": 3,
+  "centroids": {
+    "0": {
+      "cluster_id": 0,
+      "centroid_values": {
+        "average_prep_duration": 35.0,
+        "average_prep_bias": 5.0,
+        "average_departure_delay": 8.0,
+        "lateness_rate": 1.0,
+        "phone_distraction_frequency": 0.55,
+        "item_search_frequency": 0.5,
+        "last_minute_task_frequency": 0.4,
+        "bag_prepared_percentage": 0.5,
+        "average_travel_error": 0.0,
+        "weekday_delay_variation": 0.0,
+        "preparation_duration_variability": 0.0,
+        "recent_behavior_change": 0.0
+      },
+      "size": 2,
+      "interpretation": {
+        "cluster_name": "Phone-Interrupted Preparation",
+        "cluster_description": "Preparation flow is frequently fragmented by digital notifications and phone checks (55% of checkouts). Adds noticeable delay variance.",
+        "dominant_characteristics": [
+          {
+            "feature": "item_search_frequency",
+            "cluster_value": 0.5,
+            "population_mean": 0.37,
+            "relative_difference": "0.1 higher than population",
+            "z_score": 0.58
+          },
+          {
+            "feature": "bag_prepared_percentage",
+            "cluster_value": 0.5,
+            "population_mean": 0.63,
+            "relative_difference": "0.1 lower than population",
+            "z_score": -0.58
+          },
+          {
+            "feature": "average_departure_delay",
+            "cluster_value": 8.0,
+            "population_mean": 5.5,
+            "relative_difference": "2.5 higher than population",
+            "z_score": 0.56
+          },
+          {
+            "feature": "average_prep_duration",
+            "cluster_value": 35.0,
+            "population_mean": 34.0,
+            "relative_difference": "1.0 higher than population",
+            "z_score": 0.29
+          }
+        ],
+        "recommended_action": "Implement a phone-docking rule during the final 15 minutes of morning prep."
+      }
+    },
+    "1": {
+      "cluster_id": 1,
+      "centroid_values": {
+        "average_prep_duration": 32.0,
+        "average_prep_bias": 2.0,
+        "average_departure_delay": 0.5,
+        "lateness_rate": 1.0,
+        "phone_distraction_frequency": 0.2,
+        "item_search_frequency": 0.1,
+        "last_minute_task_frequency": 0.4,
+        "bag_prepared_percentage": 0.9,
+        "average_travel_error": 0.0,
+        "weekday_delay_variation": 0.0,
+        "preparation_duration_variability": 0.0,
+        "recent_behavior_change": 0.0
+      },
+      "size": 1,
+      "interpretation": {
+        "cluster_name": "Consistently Prepared Routine",
+        "cluster_description": "Proactive pre-departure habit with items packed the night before. Maintains low departure delay and minimal pre-departure distractions.",
+        "dominant_characteristics": [
+          {
+            "feature": "item_search_frequency",
+            "cluster_value": 0.1,
+            "population_mean": 0.37,
+            "relative_difference": "0.3 lower than population",
+            "z_score": -1.15
+          },
+          {
+            "feature": "bag_prepared_percentage",
+            "cluster_value": 0.9,
+            "population_mean": 0.63,
+            "relative_difference": "0.3 higher than population",
+            "z_score": 1.15
+          },
+          {
+            "feature": "average_departure_delay",
+            "cluster_value": 0.5,
+            "population_mean": 5.5,
+            "relative_difference": "5.0 lower than population",
+            "z_score": -1.13
+          },
+          {
+            "feature": "average_prep_duration",
+            "cluster_value": 32.0,
+            "population_mean": 34.0,
+            "relative_difference": "2.0 lower than population",
+            "z_score": -0.58
+          }
+        ],
+        "recommended_action": "Keep maintaining the overnight bag preparation routine."
+      }
+    }
+  },
+  "population_mean": {
+    "average_prep_duration": 34.0,
+    "average_prep_bias": 4.0,
+    "average_departure_delay": 5.5,
+    "lateness_rate": 1.0,
+    "phone_distraction_frequency": 0.43333333333333335,
+    "item_search_frequency": 0.3666666666666667,
+    "last_minute_task_frequency": 0.4000000000000001,
+    "bag_prepared_percentage": 0.6333333333333333,
+    "average_travel_error": 0.0,
+    "weekday_delay_variation": 0.0,
+    "preparation_duration_variability": 0.0,
+    "recent_behavior_change": 0.0
+  },
+  "population_std": {
+    "average_prep_duration": 3.4641016151377544,
+    "average_prep_bias": 3.4641016151377544,
+    "average_departure_delay": 4.444097208657794,
+    "lateness_rate": 1.0,
+    "phone_distraction_frequency": 0.40414518843273806,
+    "item_search_frequency": 0.23094010767585033,
+    "last_minute_task_frequency": 1.0,
+    "bag_prepared_percentage": 0.23094010767585033,
+    "average_travel_error": 1.0,
+    "weekday_delay_variation": 1.0,
+    "preparation_duration_variability": 1.0,
+    "recent_behavior_change": 1.0
+  },
+  "benchmark_results": [
+    {
+      "algorithm": "K-Means (k=2)",
+      "k": 2,
+      "silhouette": 0.108,
+      "davies_bouldin": 0.455,
+      "size_distribution": [
+        2,
+        1
+      ],
+      "status": "evaluated"
+    },
+    {
+      "algorithm": "Agglomerative (k=2)",
+      "k": 2,
+      "silhouette": 0.108,
+      "davies_bouldin": 0.455,
+      "size_distribution": [
+        2,
+        1
+      ],
+      "status": "evaluated"
+    }
+  ]
+}
