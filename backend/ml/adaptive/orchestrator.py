@@ -191,7 +191,8 @@ class AdaptiveIntelligenceOrchestrator:
             late_probability, risk_category = self.risk_classifier.classify(
                 context=context,
                 predicted_delay_min=predicted_delay,
-                baseline_delay_min=baseline_delay
+                baseline_delay_min=baseline_delay,
+                use_trained_classifier=True
             )
             component_status["risk_classification"] = "success"
         except Exception as e:

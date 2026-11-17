@@ -330,6 +330,36 @@ def train_and_evaluate(db: Session, user_id: int, training_mode: str = "auto") -
             }
         }
 
+        # Train and calibrate Personalized Lateness Classification Suite
+        try:
+            try:
+                from ml.classifier import LatenessClassifierSuite, LatenessClassifierManager
+            except ModuleNotFoundError:
+                from backend.ml.classifier import LatenessClassifierSuite, LatenessClassifierManager
+
+            clf_suite = LatenessClassifierSuite()
+            clf_res = clf_suite.train_and_benchmark(clean_df)
+            if clf_res.get("success"):
+                clf_metadata = {
+                    "user_id": user_id,
+                    "selected_best_model": clf_res.get("selected_best_model"),
+                    "test_metrics": clf_res.get("test_metrics"),
+                    "models": clf_res.get("models"),
+                    "model_version": candidate_rec.model_version,
+                    "data_provenance": data_provenance_label,
+                    "is_calibrated": any(m.get("is_calibrated", False) for m in clf_res.get("models", []))
+                }
+                LatenessClassifierManager.save_classifier_bundle(
+                    user_id=user_id,
+                    model=clf_res["fitted_model"],
+                    preprocessor=clf_res.get("preprocessor"),
+                    feature_columns=clf_res.get("fitted_columns", []),
+                    metadata=clf_metadata
+                )
+                model_metadata["classifier_metrics"] = clf_res.get("test_metrics")
+        except Exception as clf_err:
+            print(f"Lateness classifier training skipped for user {user_id}: {clf_err}")
+
         # 1. Save candidate artifacts in versioned storage
         baseline_info = {
             "event_means": event_means,
@@ -626,4 +656,55 @@ def benchmark_user_models(db: Session, user_id: int, training_mode: str = "auto"
     suite = ModelBenchmarkSuite()
     result = suite.run_benchmark(clean_df, provenance=data_provenance_label)
     return result.to_dict()
+
+
+def predict_lateness_risk(
+    user_id: int,
+    event_name: str,
+    day_of_week: str,
+    importance: str,
+    bag_prepared: bool,
+    estimated_prep_duration_min: float,
+    estimated_travel_duration_min: float
+) -> dict:
+    """Predict departure lateness risk probability and category using dedicated classifier."""
+    try:
+        from ml.classifier import LatenessClassifierManager
+    except ModuleNotFoundError:
+        from backend.ml.classifier import LatenessClassifierManager
+
+    return LatenessClassifierManager.predict_lateness_risk(
+        user_id=user_id,
+        event_name=event_name,
+        day_of_week=day_of_week,
+        importance=importance,
+        bag_prepared=bag_prepared,
+        estimated_prep_duration_min=estimated_prep_duration_min,
+        estimated_travel_duration_min=estimated_travel_duration_min
+    )
+
+
+def get_user_classifier_metrics(user_id: int) -> dict:
+    """Fetch stored classification evaluation and calibration metrics for a user."""
+    try:
+        from ml.classifier import LatenessClassifierManager
+    except ModuleNotFoundError:
+        from backend.ml.classifier import LatenessClassifierManager
+
+    bundle = LatenessClassifierManager.load_classifier_bundle(user_id)
+    if not bundle:
+        return {
+            "has_classifier": False,
+            "message": "No personalized classifier trained yet."
+        }
+    meta = bundle.get("metadata", {})
+    return {
+        "has_classifier": True,
+        "selected_best_model": meta.get("selected_best_model"),
+        "test_metrics": meta.get("test_metrics"),
+        "models": meta.get("models"),
+        "model_version": meta.get("model_version"),
+        "data_provenance": meta.get("data_provenance"),
+        "is_calibrated": meta.get("is_calibrated", True)
+    }
 

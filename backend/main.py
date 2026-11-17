@@ -405,6 +405,97 @@ def predict_adaptive_intelligence_get(
     output = orchestrator.predict(ctx, db=db)
     return output.to_dict()
 
+@app.get("/api/intelligence/risk")
+def predict_lateness_risk_get(
+    event_name: str,
+    day_of_week: str,
+    importance: str = "medium",
+    bag_prepared: bool = False,
+    estimated_prep: float = 30.0,
+    estimated_travel: float = 20.0,
+    event_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Dedicated Lateness Risk Classification prediction endpoint (GET)."""
+    try:
+        from ml.adaptive import PredictionContext, AdaptiveIntelligenceOrchestrator
+    except ModuleNotFoundError:
+        from backend.ml.adaptive import PredictionContext, AdaptiveIntelligenceOrchestrator
+
+    ctx = PredictionContext(
+        user_id=current_user.id,
+        event_name=event_name,
+        day_of_week=day_of_week,
+        event_importance=importance,
+        estimated_prep_duration=estimated_prep,
+        estimated_travel_duration=estimated_travel,
+        bag_prepared=bag_prepared,
+        event_id=event_id
+    )
+    orchestrator = AdaptiveIntelligenceOrchestrator()
+    output = orchestrator.predict(ctx, db=db)
+    
+    return {
+        "late_probability": output.late_probability,
+        "risk_category": output.risk_category,
+        "predicted_delay_minutes": output.predicted_delay_minutes,
+        "baseline_predicted_delay_minutes": output.baseline_predicted_delay_minutes,
+        "model_version": output.model_version,
+        "model_type": output.model_type,
+        "model_availability": output.model_availability,
+        "training_data_provenance": output.data_quality_status.get("provenance", "unknown"),
+        "prediction_timestamp": output.execution_timestamp,
+        "confidence_status": output.confidence_status,
+        "contributing_factors": output.contributing_factors,
+        "recommended_interventions": output.recommended_interventions
+    }
+
+@app.post("/api/intelligence/risk")
+def predict_lateness_risk_post(
+    req: IntelligencePredictRequestSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Dedicated Lateness Risk Classification prediction endpoint (POST)."""
+    try:
+        from ml.adaptive import PredictionContext, AdaptiveIntelligenceOrchestrator
+    except ModuleNotFoundError:
+        from backend.ml.adaptive import PredictionContext, AdaptiveIntelligenceOrchestrator
+
+    ctx = PredictionContext(
+        user_id=current_user.id,
+        event_name=req.event_name,
+        day_of_week=req.day_of_week,
+        event_importance=req.importance,
+        estimated_prep_duration=req.estimated_prep_duration,
+        estimated_travel_duration=req.estimated_travel_duration,
+        bag_prepared=req.bag_prepared,
+        event_id=req.event_id
+    )
+    orchestrator = AdaptiveIntelligenceOrchestrator()
+    output = orchestrator.predict(ctx, db=db)
+    
+    return {
+        "late_probability": output.late_probability,
+        "risk_category": output.risk_category,
+        "predicted_delay_minutes": output.predicted_delay_minutes,
+        "baseline_predicted_delay_minutes": output.baseline_predicted_delay_minutes,
+        "model_version": output.model_version,
+        "model_type": output.model_type,
+        "model_availability": output.model_availability,
+        "training_data_provenance": output.data_quality_status.get("provenance", "unknown"),
+        "prediction_timestamp": output.execution_timestamp,
+        "confidence_status": output.confidence_status,
+        "contributing_factors": output.contributing_factors,
+        "recommended_interventions": output.recommended_interventions
+    }
+
+@app.get("/api/models/classifier/metrics")
+def get_classifier_metrics(current_user: User = Depends(get_current_user)):
+    """Fetch current user's trained classifier benchmarking and calibration metrics."""
+    return models.get_user_classifier_metrics(current_user.id)
+
 @app.post("/api/intelligence/predict")
 def predict_adaptive_intelligence_post(
     req: IntelligencePredictRequestSchema,

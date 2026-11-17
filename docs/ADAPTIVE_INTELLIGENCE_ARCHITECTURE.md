@@ -186,3 +186,38 @@ The adaptive intelligence architecture is verified by `backend/tests/test_adapti
 - Cold-start and non-existent user handling.
 - Privacy scrubbing of user metadata.
 - End-to-end FastAPI endpoint integration (`/api/predict` & `/api/intelligence/predict`).
+
+---
+
+## 6. Personalized Lateness Risk Classification Engine (Prompt 2.2)
+
+### 6.1 Operational Lateness Definition & Target Formulation
+MicroDelay separates the continuous delay duration ($y \in \mathbb{R}$) from the discrete probability of departing late ($P(Y > \tau)$):
+$$\text{departure\_delay} = \text{actual\_departure} - \text{planned\_departure}$$
+$$Y_{\text{binary}} = \begin{cases} 1, & \text{if } \text{departure\_delay} > \tau \\ 0, & \text{if } \text{departure\_delay} \le \tau \end{cases}$$
+where $\tau = 0.0$ minutes is the default configurable tolerance threshold. Late departure is strictly distinguished from destination arrival delay (traffic or transit disruptions en route).
+
+### 6.2 Classification Benchmark Suite & Parsimonious Selection
+The classification engine evaluates 4 distinct algorithms over identical chronological holdout partitions:
+1. **Logistic Regression:** Regularized linear probabilistic baseline (`class_weight='balanced'`).
+2. **Random Forest Classifier:** Non-linear bagged ensemble (`n_estimators=50, max_depth=5, class_weight='balanced'`).
+3. **HistGradientBoosting Classifier:** Fast tree booster with sample weighting (`class_weight='balanced'`).
+4. **XGBoost Classifier:** Regularized gradient booster with positive class weighting (`scale_pos_weight`).
+
+Models are ranked and selected based on **Validation Macro F1** to ensure equal penalization of false alarms and missed delays under class imbalance.
+
+### 6.3 Strictly Proper Probability Calibration
+Raw model outputs (e.g. tree fraction votes or uncalibrated margins) undergo probability calibration via **Platt Scaling (Sigmoid CalibratedClassifierCV)**. Platt calibration is only retained if the validation **Brier Score** ($\text{Brier} = \frac{1}{N}\sum (p_i - y_i)^2$) improves or preserves calibration quality ($\text{Brier}_{\text{cal}} \le \text{Brier}_{\text{raw}} + 0.02$).
+
+### 6.4 Operational Risk Tiers
+Calibrated probabilities are mapped to actionable risk thresholds:
+- **Low Risk ($< 30\%$):** Normal departure; standard routine prompts.
+- **Moderate Risk ($30\% - 60\%$):** Elevated vulnerability; proactive distraction warning.
+- **High Risk ($60\% - 85\%$):** High likelihood of delay; targeted intervention prompts (e.g., bag checklist).
+- **Extreme Risk ($> 85\%$):** Critical lateness expected; urgent departure acceleration.
+
+### 6.5 Edge-Case Safeguards & Independence
+- **Single-Class Protection:** If training data contains only on-time or only late records, the pipeline falls back gracefully to empirical historical rates without numerical singularity.
+- **Independence:** Regression delay models and classification risk models are persisted independently (`clf_model_user_{id}.pkl`, `clf_preprocessor_user_{id}.pkl`, `clf_feats_user_{id}.pkl`, `clf_meta_user_{id}.pkl`), allowing isolated upgrades, retraining, and rollbacks.
+- **API Endpoints:** Dedicated GET/POST `/api/intelligence/risk` and `/api/models/classifier/metrics`.
+

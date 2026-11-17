@@ -52,6 +52,20 @@ from ml.registry import (
     VERSIONS_DIR
 )
 try:
+    from ml.classifier import (
+        LatenessClassificationConfig,
+        LatenessClassifierSuite,
+        LatenessClassifierManager,
+        ClassificationEvaluationMetrics
+    )
+except ModuleNotFoundError:
+    from backend.ml.classifier import (
+        LatenessClassificationConfig,
+        LatenessClassifierSuite,
+        LatenessClassifierManager,
+        ClassificationEvaluationMetrics
+    )
+try:
     from ml.adaptive import (
         PredictionContext,
         AdaptiveIntelligenceOutput,
@@ -113,5 +127,9 @@ __all__ = [
     "AdaptiveIntelligenceOrchestrator",
     "ModelAvailability",
     "RiskCategory",
-    "ConfidenceStatus"
+    "ConfidenceStatus",
+    "LatenessClassificationConfig",
+    "LatenessClassifierSuite",
+    "LatenessClassifierManager",
+    "ClassificationEvaluationMetrics"
 ]

@@ -77,9 +77,33 @@ class LatenessRiskClassifier:
         context: PredictionContext,
         predicted_delay_min: float,
         baseline_delay_min: float = 4.5,
-        residual_std: float = 3.5
+        residual_std: float = 3.5,
+        use_trained_classifier: bool = False
     ) -> Tuple[Optional[float], Optional[str]]:
         """Main classification entrypoint returning (late_probability, risk_category)."""
+        # 1. Attempt inference with dedicated personalized trained classifier
+        if use_trained_classifier:
+            try:
+                try:
+                    from ml.classifier import LatenessClassifierManager
+                except ModuleNotFoundError:
+                    from backend.ml.classifier import LatenessClassifierManager
+
+                clf_pred = LatenessClassifierManager.predict_lateness_risk(
+                    user_id=context.user_id,
+                    event_name=context.event_name,
+                    day_of_week=context.day_of_week,
+                    importance=context.event_importance,
+                    bag_prepared=context.bag_prepared,
+                    estimated_prep_duration_min=context.estimated_prep_duration,
+                    estimated_travel_duration_min=context.estimated_travel_duration
+                )
+                if clf_pred and clf_pred.get("model_type") != "empirical_prior":
+                    return clf_pred["late_probability"], clf_pred["risk_category"]
+            except Exception as clf_err:
+                logger.debug("Dedicated classifier lookup fallback: %s", clf_err)
+
+        # 2. Calibrated empirical fallback based on predicted delay
         try:
             prob = self.compute_late_probability(predicted_delay_min, residual_std=residual_std)
             category = self.classify_risk(predicted_delay_min, prob)
