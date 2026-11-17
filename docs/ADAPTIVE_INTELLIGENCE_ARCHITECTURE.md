@@ -418,6 +418,87 @@ The insights generator is strictly bounded by underlying data. It enforces the f
 - `POST /api/intelligence/profile/refresh`: Forces recalculation of profile snapshot.
 - **Frontend UI (`activeTab === 'profile'`):** Dedicated **Behavioral Profile** tab in React featuring sufficiency badges, window selectors (`All-Time`, `30 Days`, `7 Days`), 6 dimension metric cards, evidence-backed insight list, delta comparison view, and snapshot audit history table.
 
+---
+
+## 10. Prediction Explainability & Behavioral Reasoning Engine (Prompt 2.6)
+
+### 10.1 Objective & Architectural Foundation
+To prevent users from receiving uninterpretable black-box outputs (e.g. an isolated "78% chance of being late" or "+6.2m delay"), MicroDelay 2.0 incorporates a dedicated **Prediction Explainability & Behavioral Reasoning Engine** (`backend/ml/explainability.py`).
+
+The engine bridges statistical machine learning outputs with intuitive human reasoning by decomposing predictions into:
+1. **Mathematical Feature Attribution:** Exact directional influence of situational variables on predicted minutes and probabilities.
+2. **Behavioral Habit Comparison:** Empirical contrast between situational inputs and the user's validated historical baseline (established via Prompt 2.5).
+3. **Epistemic Source Tagging:** Explicit labeling of the source and reliability tier for every claim.
+4. **Scientific Causation Guardrails:** Rigorous distinctions between statistical predictive correlation and physical/biological causation.
+
+---
+
+### 10.2 Model-Specific Local Explanation Decompositions
+Different algorithms require mathematically distinct explanation techniques rather than a single uniform heuristic:
+
+1. **Tree-Based Models (Random Forest Regressor & Classifier):**
+   - **Primary Method (`tree_shap`):** Attempts Shapley Additive Explanations via `shap.TreeExplainer` when compatible libraries are present.
+   - **Graceful Fallback (`tree_feature_contribution`):** In environments where `shap` is absent or encounters version incompatibilities, the explainer decomposes predictions by calculating per-feature node contribution across decision tree decision paths ($w_i = \text{val}_i \cdot \text{feature\_importance}_i$), ensuring 100% inference resilience without crashing.
+
+2. **Linear & Logistic Regression (`linear_coefficients`):**
+   - Standardized coefficient attribution ($w_i \cdot x_i$), measuring exact linear pushes above or below intercept bias for both log-odds and continuous delays.
+
+3. **Cold-Start & Heuristic Baselines (`behavioral_rule_reasoning`):**
+   - Prioritized behavioral rules applied to situational inputs (e.g., bag unreadiness penalties, Monday departure lag, prep time compression).
+
+---
+
+### 10.3 Historical Behavioral Context Comparator
+Local prediction explanations do not merely interpret model weights; they anchor predictions in personal behavioral truth:
+- **Preparation Underestimation:** Contrasts planned prep duration with user's historical average actual prep time (e.g., "Planned prep duration of 20.0m is 12.4m shorter than your historical average of 32.4m").
+- **Overnight Bag Preparation:** Contrasts bag state with historical pack rate (e.g., "Bag is not packed; historically you leave bags unprepared 65% of the time, causing doorway bottlenecks").
+- **Monday Morning Commute Inertia:** Flags weekday friction when planning high-stakes departures on historically difficult days.
+
+---
+
+### 10.4 Global Feature Importance Sensitivity Analysis
+- **Engine (`GlobalFeatureImportanceCalculator`):** Evaluates overall model sensitivity across all historical checkouts.
+- **Algorithms:** Computes Permutation Importance on validation datasets where sample counts permit, falling back to Mean Decrease in Impurity (Gini MDI) for Random Forest or normalized coefficients for Logistic Regression.
+- **Visual Presentation:** Exported via `GET /api/intelligence/features/importance` and visualized with Recharts horizontal sensitivity bar charts.
+
+---
+
+### 10.5 Epistemic Source Tagging System
+Every contributing factor and comparison is tagged with a strict epistemic source badge:
+- `directly_observed_behavior`: Explicit binary/continuous state directly provided by user checkout (e.g. `bag_prepared = False`).
+- `model_contribution`: Pure mathematical ML coefficient or Tree SHAP weight contribution.
+- `statistical_association`: Empirical correlation discovered from personal historical checkouts.
+- `estimated_behavioral_influence`: Heuristic or domain-knowledge estimate applied under cold-start conditions.
+
+---
+
+### 10.6 Scientific Guardrails & Causation Disclaimer
+All explanation outputs enforce a strict scientific disclaimer:
+> *"Scientific Notice: Contributing factors reflect mathematical model weights and empirical associations observed across historical checkouts. They do not constitute deterministic or biological causation. High feature importance signifies predictive correlation, not guaranteed outcome."*
+
+Furthermore, unmeasured environmental variables (sudden traffic bottlenecks, severe weather events, public transit cancellations) are explicitly listed under `limitations`.
+
+---
+
+### 10.7 Persistence, Schema, and Security Isolation
+- **Database Table:** `prediction_explanations` (`PredictionExplanationRecord` in `backend/database.py`).
+- **Audit Fields:** `prediction_id`, `user_id`, `model_version`, `feature_schema_version`, `explanation_method`, `predicted_delay_minutes`, `late_probability`, `top_positive_contributors`, `top_mitigating_factors`, `historical_comparisons`, `limitations`, `causation_disclaimer`, `feature_audit_values`, `created_at`.
+- **User Isolation:** All explanation lookups (`models.get_user_prediction_explanation`, `models.get_user_explanation_history`) strictly filter by `user_id == current_user.id`. User A can never query or view User B's explanation records.
+
+---
+
+### 10.8 API Endpoints & React Frontend Integration
+- **Backend Endpoints:**
+  - `GET /api/intelligence/risk`: Now returns comprehensive `explanation` payload along with risk probability.
+  - `POST /api/intelligence/risk` & `POST /api/intelligence/predict`: Return full explanation contract.
+  - `GET /api/intelligence/explain`: Retrieves existing prediction explanation by `prediction_id` or generates on-demand explanation for given situational parameters.
+  - `GET /api/intelligence/features/importance`: Global feature importance ranking for active model.
+  - `GET /api/intelligence/explanations/history`: User's audit trail of past explanations.
+- **Frontend UI Integration (`frontend/src/App.tsx`):**
+  - **Morning Tracker / Simulator:** Expandable **"Why This Prediction?"** card with method badge, factor filter buttons (`All`, `Delay Increasers`, `Mitigating Factors`), epistemic source chips, personal baseline comparisons, and scientific disclaimer.
+  - **Model Intelligence Tab:** Global Feature Importance ranking with Recharts bar chart, human-accessible feature sensitivity breakdown, and historical prediction explanations audit table.
+
+
 
 
 

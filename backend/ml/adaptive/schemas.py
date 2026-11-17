@@ -117,6 +117,7 @@ class AdaptiveIntelligenceOutput:
     model_availability: str = ModelAvailability.AVAILABLE.value
     data_quality_status: Dict[str, Any] = field(default_factory=dict)
     personalization_info: Dict[str, Any] = field(default_factory=dict)
+    explanation: Optional[Dict[str, Any]] = None
     fallback_applied: bool = False
     component_status: Dict[str, str] = field(default_factory=dict)
     execution_timestamp: str = field(
@@ -139,6 +140,7 @@ class AdaptiveIntelligenceOutput:
             "model_availability": self.model_availability,
             "data_quality_status": self.data_quality_status,
             "personalization_info": self.personalization_info,
+            "explanation": self.explanation,
             "fallback_applied": self.fallback_applied,
             "component_status": self.component_status,
             "execution_timestamp": self.execution_timestamp,
@@ -160,5 +162,6 @@ class AdaptiveIntelligenceOutput:
             "risk_category": self.risk_category,
             "model_availability": self.model_availability,
             "confidence_status": self.confidence_status,
-            "personalization_info": self.personalization_info
+            "personalization_info": self.personalization_info,
+            "explanation": self.explanation
         }

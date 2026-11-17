@@ -188,6 +188,28 @@ class BehavioralProfileSnapshot(Base):
     user = relationship("User", backref="behavioral_profiles")
 
 
+class PredictionExplanationRecord(Base):
+    __tablename__ = "prediction_explanations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    prediction_id = Column(String, unique=True, index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    model_version = Column(String, nullable=False)
+    feature_schema_version = Column(String, default="v1_leakage_safe", nullable=False)
+    explanation_method = Column(String, nullable=False)  # "tree_shap", "tree_feature_contribution", "linear_coefficients", "behavioral_rule_reasoning"
+    predicted_delay_min = Column(Float, nullable=True)
+    late_probability = Column(Float, nullable=True)
+    top_contributing_features = Column(Text, nullable=False)  # JSON list of positive contributors
+    mitigating_factors = Column(Text, nullable=True)  # JSON list of mitigating contributors
+    historical_comparisons = Column(Text, nullable=True)  # JSON list of comparison statements
+    limitations = Column(Text, nullable=True)  # JSON list of caveats
+    causation_disclaimer = Column(String, nullable=False)
+    feature_audit_values = Column(Text, nullable=False)  # JSON dict of input values
+    explanation_timestamp = Column(String, nullable=False)
+
+    user = relationship("User", backref="prediction_explanations")
+
+
 def migrate_db(db_engine=None):
     """Safely migrate SQLite database schema to include provenance fields and backfill legacy records."""
     target_engine = db_engine or engine
@@ -295,6 +317,27 @@ def migrate_db(db_engine=None):
                 cluster_reference VARCHAR,
                 confidence_or_sufficiency_status VARCHAR NOT NULL,
                 insights TEXT NOT NULL
+            )
+        """))
+
+        # Create prediction_explanations table if not present (Prompt 2.6)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS prediction_explanations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                prediction_id VARCHAR UNIQUE NOT NULL,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                model_version VARCHAR NOT NULL,
+                feature_schema_version VARCHAR NOT NULL,
+                explanation_method VARCHAR NOT NULL,
+                predicted_delay_min FLOAT,
+                late_probability FLOAT,
+                top_contributing_features TEXT NOT NULL,
+                mitigating_factors TEXT,
+                historical_comparisons TEXT,
+                limitations TEXT,
+                causation_disclaimer VARCHAR NOT NULL,
+                feature_audit_values TEXT NOT NULL,
+                explanation_timestamp VARCHAR NOT NULL
             )
         """))
 

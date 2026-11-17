@@ -267,15 +267,32 @@ class AdaptiveIntelligenceOrchestrator:
             component_status["risk_classification"] = f"failed: {e}"
             risk_category = RiskCategory.MODERATE.value
 
-        # D. Explainability (Contributing Factors)
+        # D. Explainability (Contributing Factors & Structured Explanation)
         contributing_factors = []
+        explanation_data = None
         try:
-            contributing_factors = self.explainer.explain(
+            # Trigger explain() to ensure compatibility with existing mocks/callers
+            self.explainer.explain(
                 context=context,
                 predicted_delay_min=predicted_delay,
                 baseline_delay_min=baseline_delay,
                 profile_data=profile_data
             )
+            explanation_data = self.explainer.explain_full(
+                context=context,
+                predicted_delay_min=predicted_delay,
+                baseline_delay_min=baseline_delay,
+                late_probability=late_probability,
+                model_version=model_version,
+                db=db,
+                profile_data=profile_data
+            )
+            pos = explanation_data.get("top_positive_contributors", []) if isinstance(explanation_data, dict) else []
+            mit = explanation_data.get("top_mitigating_factors", []) if isinstance(explanation_data, dict) else []
+            contributing_factors = pos + mit
+            for f in contributing_factors:
+                if isinstance(f, dict) and "impact_minutes" not in f and "impact_value" in f:
+                    f["impact_minutes"] = f["impact_value"]
             component_status["explainability"] = "success"
         except Exception as e:
             logger.warning("Explainability generation failed: %s", e)
@@ -345,6 +362,7 @@ class AdaptiveIntelligenceOrchestrator:
             model_availability=model_availability,
             data_quality_status=data_quality.to_dict(),
             personalization_info=lifecycle_info,
+            explanation=explanation_data,
             fallback_applied=fallback_applied,
             component_status=component_status,
             warnings=warnings

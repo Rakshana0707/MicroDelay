@@ -981,5 +981,61 @@ def compare_user_profiles(
     return PersonalizedBehavioralProfiler.compare_profile_periods(dict_a, dict_b)
 
 
+def get_user_feature_importance(db: Session, user_id: int) -> dict:
+    """Fetch global feature importance for the user's active model (Random Forest / Classifier)."""
+    try:
+        from ml.explainability import GlobalFeatureImportanceCalculator
+        from ml.registry import ModelRegistry
+        from ml.classifier import LatenessClassifierManager
+    except ModuleNotFoundError:
+        from backend.ml.explainability import GlobalFeatureImportanceCalculator
+        from backend.ml.registry import ModelRegistry
+        from backend.ml.classifier import LatenessClassifierManager
+
+    # Try regression bundle first
+    bundle = ModelRegistry.load_active_model_bundle(db, user_id)
+    if bundle and bundle.get("model") is not None:
+        model = bundle["model"]
+        features = bundle.get("features", [])
+        res = GlobalFeatureImportanceCalculator.calculate_global_importance(model, features)
+        res["model_version"] = bundle.get("model_version", "v1")
+        res["model_type"] = "random_forest_regressor"
+        return res
+
+    # Try classifier bundle next
+    clf_bundle = LatenessClassifierManager.load_classifier_bundle(user_id)
+    if clf_bundle and clf_bundle.get("model") is not None:
+        model = clf_bundle["model"]
+        features = clf_bundle.get("features", [])
+        res = GlobalFeatureImportanceCalculator.calculate_global_importance(model, features)
+        res["model_version"] = clf_bundle.get("metadata", {}).get("model_version", "v1_classifier")
+        res["model_type"] = clf_bundle.get("metadata", {}).get("selected_model", "classifier")
+        return res
+
+    # Fallback to standard baseline heuristic importances
+    return GlobalFeatureImportanceCalculator.calculate_global_importance(None, [])
+
+
+def get_user_explanation_history(db: Session, user_id: int, limit: int = 10) -> list:
+    """Fetch stored prediction explanation audit records for user."""
+    try:
+        from ml.explainability import ExplainabilityService
+    except ModuleNotFoundError:
+        from backend.ml.explainability import ExplainabilityService
+
+    return ExplainabilityService.get_explanation_history(db, user_id, limit=limit)
+
+
+def get_user_prediction_explanation(db: Session, user_id: int, prediction_id: str) -> Optional[dict]:
+    """Retrieve specific prediction explanation ensuring ownership isolation."""
+    try:
+        from ml.explainability import ExplainabilityService
+    except ModuleNotFoundError:
+        from backend.ml.explainability import ExplainabilityService
+
+    return ExplainabilityService.get_explanation_by_id(db, user_id, prediction_id)
+
+
+
 
 

@@ -412,6 +412,7 @@ def predict_adaptive_intelligence_get(
     output = orchestrator.predict(ctx, db=db)
     return output.to_dict()
 
+
 @app.get("/api/intelligence/risk")
 def predict_lateness_risk_get(
     event_name: str,
@@ -456,7 +457,8 @@ def predict_lateness_risk_get(
         "confidence_status": output.confidence_status,
         "contributing_factors": output.contributing_factors,
         "recommended_interventions": output.recommended_interventions,
-        "personalization_info": output.personalization_info
+        "personalization_info": output.personalization_info,
+        "explanation": output.explanation
     }
 
 @app.post("/api/intelligence/risk")
@@ -497,7 +499,8 @@ def predict_lateness_risk_post(
         "confidence_status": output.confidence_status,
         "contributing_factors": output.contributing_factors,
         "recommended_interventions": output.recommended_interventions,
-        "personalization_info": output.personalization_info
+        "personalization_info": output.personalization_info,
+        "explanation": output.explanation
     }
 
 @app.get("/api/models/classifier/metrics")
@@ -666,6 +669,75 @@ def predict_adaptive_intelligence_post(
     orchestrator = AdaptiveIntelligenceOrchestrator()
     output = orchestrator.predict(ctx, db=db)
     return output.to_dict()
+
+# Prediction Explainability Endpoints (Prompt 2.6)
+@app.get("/api/intelligence/explain")
+def get_prediction_explanation_endpoint(
+    prediction_id: Optional[str] = None,
+    event_name: Optional[str] = None,
+    day_of_week: Optional[str] = None,
+    importance: str = "medium",
+    bag_prepared: bool = False,
+    estimated_prep: float = 30.0,
+    estimated_travel: float = 20.0,
+    event_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Retrieve an existing prediction explanation by ID or generate on-demand explanation for context."""
+    if prediction_id:
+        exp = models.get_user_prediction_explanation(db, current_user.id, prediction_id)
+        if not exp:
+            raise HTTPException(status_code=404, detail="Prediction explanation not found or access denied.")
+        return exp
+
+    if not event_name or not day_of_week:
+        raise HTTPException(status_code=400, detail="Provide either prediction_id or event_name and day_of_week.")
+
+    try:
+        from ml.adaptive import PredictionContext, AdaptiveIntelligenceOrchestrator
+    except ModuleNotFoundError:
+        from backend.ml.adaptive import PredictionContext, AdaptiveIntelligenceOrchestrator
+
+    ctx = PredictionContext(
+        user_id=current_user.id,
+        event_name=event_name,
+        day_of_week=day_of_week,
+        event_importance=importance,
+        estimated_prep_duration=estimated_prep,
+        estimated_travel_duration=estimated_travel,
+        bag_prepared=bag_prepared,
+        event_id=event_id
+    )
+    orchestrator = AdaptiveIntelligenceOrchestrator()
+    output = orchestrator.predict(ctx, db=db)
+    return output.explanation or {
+        "prediction_id": f"pred_adhoc_{current_user.id}",
+        "top_positive_contributors": output.contributing_factors,
+        "top_mitigating_factors": [],
+        "historical_comparisons": [],
+        "limitations": ["Generated via fallback adaptive pipeline."],
+        "causation_disclaimer": "Contributing factors reflect statistical correlation, not direct causation.",
+        "explanation_method": "behavioral_rule_reasoning"
+    }
+
+@app.get("/api/intelligence/explanations/history")
+def get_explanation_history_endpoint(
+    limit: int = 10,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Fetch recent prediction explanation audit records for the authenticated user."""
+    return models.get_user_explanation_history(db, current_user.id, limit=limit)
+
+@app.get("/api/intelligence/features/importance")
+def get_feature_importance_endpoint(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Retrieve global feature importance ranking for the user's active model."""
+    return models.get_user_feature_importance(db, current_user.id)
+
 
 @app.post("/api/checkout")
 def create_checkout_log(

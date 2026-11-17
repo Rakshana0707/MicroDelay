@@ -31,7 +31,9 @@ import {
   Share2,
   Compass,
   Sparkles,
-  TrendingDown
+  TrendingDown,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import {
   AreaChart,
@@ -274,6 +276,56 @@ interface RecommendedIntervention {
   priority: string;
 }
 
+// Prediction Explainability & Behavioral Reasoning Interfaces (Prompt 2.6)
+interface ContributingFactorData {
+  factor: string;
+  impact_value: number;
+  direction: 'increases_delay' | 'decreases_delay';
+  description: string;
+  evidence_type: 'model_contribution' | 'statistical_association' | 'directly_observed_behavior' | 'estimated_behavioral_influence';
+  raw_weight?: number | null;
+  feature_name?: string | null;
+}
+
+interface HistoricalComparisonData {
+  dimension: string;
+  metric: string;
+  current_value: any;
+  historical_baseline: any;
+  statement: string;
+  evidence_type: string;
+}
+
+interface PredictionExplanationData {
+  prediction_id: string;
+  model_version: string;
+  feature_schema_version: string;
+  explanation_method: 'tree_shap' | 'tree_feature_contribution' | 'linear_coefficients' | 'behavioral_rule_reasoning';
+  predicted_delay_minutes: number;
+  late_probability?: number | null;
+  top_positive_contributors: ContributingFactorData[];
+  top_mitigating_factors: ContributingFactorData[];
+  historical_comparisons: HistoricalComparisonData[];
+  limitations: string[];
+  causation_disclaimer: string;
+  feature_audit_values?: Record<string, any>;
+  explanation_timestamp: string;
+}
+
+interface GlobalFeatureImportanceData {
+  method: string;
+  features: Array<{
+    feature: string;
+    importance: number;
+    std?: number;
+    normalized_weight?: number;
+    human_name?: string;
+  }>;
+  top_feature?: string;
+  evaluated_at: string;
+  message?: string;
+}
+
 interface RiskPredictionData {
   late_probability: number | null;
   risk_category: 'low' | 'moderate' | 'high' | 'extreme' | null;
@@ -293,6 +345,7 @@ interface RiskPredictionData {
   contributing_factors: RiskContributingFactor[];
   recommended_interventions: RecommendedIntervention[];
   personalization_info?: PersonalizationInfoData;
+  explanation?: PredictionExplanationData;
 }
 
 // Global-to-Personalized Learning Interfaces (Prompt 2.3)
@@ -670,6 +723,14 @@ export default function App() {
   const [profileLoading, setProfileLoading] = useState<boolean>(false);
   const [profileRefreshing, setProfileRefreshing] = useState<boolean>(false);
   const [selectedProfileWindow, setSelectedProfileWindow] = useState<'all_time' | '30d' | '7d'>('all_time');
+
+  // Prediction Explainability & Behavioral Reasoning States (Prompt 2.6)
+  const [predictionExplanation, setPredictionExplanation] = useState<PredictionExplanationData | null>(null);
+  const [globalFeatureImportance, setGlobalFeatureImportance] = useState<GlobalFeatureImportanceData | null>(null);
+  const [importanceLoading, setImportanceLoading] = useState<boolean>(false);
+  const [explanationHistory, setExplanationHistory] = useState<PredictionExplanationData[]>([]);
+  const [isExplanationExpanded, setIsExplanationExpanded] = useState<boolean>(true);
+  const [auditFilter, setAuditFilter] = useState<'all' | 'increasing' | 'mitigating'>('all');
 
   // References for Simulator Clock
   const clockIntervalRef = useRef<any>(null);
@@ -1066,6 +1127,31 @@ export default function App() {
     } catch (e) {
       console.warn("Could not fetch cluster benchmark:", e);
     }
+
+    // 8. Fetch Global Feature Importance (Prompt 2.6)
+    try {
+      setImportanceLoading(true);
+      const fiRes = await fetch(`${BACKEND_URL}/api/intelligence/features/importance`, { headers });
+      if (fiRes.ok) {
+        const fiData = await fiRes.json();
+        setGlobalFeatureImportance(fiData);
+      }
+    } catch (e) {
+      console.warn("Could not fetch global feature importance:", e);
+    } finally {
+      setImportanceLoading(false);
+    }
+
+    // 9. Fetch Recent Explanations Audit History (Prompt 2.6)
+    try {
+      const expRes = await fetch(`${BACKEND_URL}/api/intelligence/explanations/history?limit=10`, { headers });
+      if (expRes.ok) {
+        const expData = await expRes.json();
+        setExplanationHistory(expData);
+      }
+    } catch (e) {
+      console.warn("Could not fetch explanation history:", e);
+    }
   };
 
   // 7. Fetch Personalized Behavioral Profile (Prompt 2.5)
@@ -1385,6 +1471,9 @@ export default function App() {
         }
         if (riskData.predicted_delay_minutes !== undefined && riskData.predicted_delay_minutes !== null) {
           setPredictedDelay(riskData.predicted_delay_minutes);
+        }
+        if (riskData.explanation) {
+          setPredictionExplanation(riskData.explanation);
         }
       }
     } catch (err) {
@@ -2563,6 +2652,204 @@ export default function App() {
                             <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', lineHeight: 1.4, padding: '0.4rem 0.6rem', backgroundColor: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
                               {personalizationInfo.explanation}
                             </div>
+                          </div>
+                        )}
+
+                        {/* Prediction Explainability & Behavioral Reasoning (Prompt 2.6) */}
+                        {predictionExplanation && (
+                          <div className="explain-card">
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <button 
+                                type="button" 
+                                className="explain-header-btn" 
+                                onClick={() => setIsExplanationExpanded(!isExplanationExpanded)}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                                  <Sparkles size={16} style={{ color: 'var(--accent-primary)' }} />
+                                  <strong style={{ fontSize: '0.86rem', color: 'var(--text-primary)' }}>Why This Prediction? (Model Reasoning)</strong>
+                                  <span className="explain-badge model">
+                                    {predictionExplanation.explanation_method === 'tree_shap' ? 'Tree SHAP' :
+                                     predictionExplanation.explanation_method === 'tree_feature_contribution' ? 'Tree Decomposition' :
+                                     predictionExplanation.explanation_method === 'linear_coefficients' ? 'Standardized Coefficients' :
+                                     'Behavioral Rules'}
+                                  </span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                                  <span>{isExplanationExpanded ? 'Hide' : 'Explain'}</span>
+                                  {isExplanationExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                                </div>
+                              </button>
+                            </div>
+
+                            {isExplanationExpanded && (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', marginTop: '0.25rem' }}>
+                                {/* Filter Toggle Buttons */}
+                                <div style={{ display: 'flex', gap: '0.35rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem' }}>
+                                  <button
+                                    type="button"
+                                    onClick={() => setAuditFilter('all')}
+                                    style={{
+                                      padding: '0.2rem 0.55rem',
+                                      fontSize: '0.72rem',
+                                      borderRadius: '4px',
+                                      border: '1px solid var(--border-color)',
+                                      backgroundColor: auditFilter === 'all' ? 'var(--accent-primary)' : 'var(--bg-primary)',
+                                      color: auditFilter === 'all' ? '#fff' : 'var(--text-secondary)',
+                                      cursor: 'pointer',
+                                      fontWeight: 600
+                                    }}
+                                  >
+                                    All Factors
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setAuditFilter('increasing')}
+                                    style={{
+                                      padding: '0.2rem 0.55rem',
+                                      fontSize: '0.72rem',
+                                      borderRadius: '4px',
+                                      border: '1px solid var(--border-color)',
+                                      backgroundColor: auditFilter === 'increasing' ? 'var(--accent-danger)' : 'var(--bg-primary)',
+                                      color: auditFilter === 'increasing' ? '#fff' : 'var(--text-secondary)',
+                                      cursor: 'pointer',
+                                      fontWeight: 600
+                                    }}
+                                  >
+                                    Delay Increasers (+{predictionExplanation.top_positive_contributors.length})
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setAuditFilter('mitigating')}
+                                    style={{
+                                      padding: '0.2rem 0.55rem',
+                                      fontSize: '0.72rem',
+                                      borderRadius: '4px',
+                                      border: '1px solid var(--border-color)',
+                                      backgroundColor: auditFilter === 'mitigating' ? 'var(--accent-success)' : 'var(--bg-primary)',
+                                      color: auditFilter === 'mitigating' ? '#fff' : 'var(--text-secondary)',
+                                      cursor: 'pointer',
+                                      fontWeight: 600
+                                    }}
+                                  >
+                                    Mitigating Factors (-{predictionExplanation.top_mitigating_factors.length})
+                                  </button>
+                                </div>
+
+                                {/* Top Risk Contributors (Delay Increasers) */}
+                                {(auditFilter === 'all' || auditFilter === 'increasing') && predictionExplanation.top_positive_contributors && predictionExplanation.top_positive_contributors.length > 0 && (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.74rem', color: 'var(--accent-danger)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                                      <TrendingUp size={13} />
+                                      <span>Major Factors Increasing Delay / Lateness Risk:</span>
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                      {predictionExplanation.top_positive_contributors.map((c, idx) => (
+                                        <div key={idx} className="explain-factor-box" style={{ borderLeft: '3px solid var(--accent-danger)' }}>
+                                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.35rem' }}>
+                                            <strong style={{ fontSize: '0.8rem', color: 'var(--text-primary)' }}>{c.factor}</strong>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                              <span className={`explain-badge ${
+                                                c.evidence_type === 'directly_observed_behavior' ? 'observed' :
+                                                c.evidence_type === 'statistical_association' ? 'statistical' :
+                                                c.evidence_type === 'model_contribution' ? 'model' : 'estimated'
+                                              }`}>
+                                                {c.evidence_type === 'directly_observed_behavior' ? 'Direct Observation' :
+                                                 c.evidence_type === 'statistical_association' ? 'Historical Pattern' :
+                                                 c.evidence_type === 'model_contribution' ? 'Model Attribution' : 'Behavioral Estimate'}
+                                              </span>
+                                              <span style={{ fontWeight: 700, color: 'var(--accent-danger)', fontSize: '0.82rem', fontFamily: 'var(--font-mono)' }}>
+                                                +{c.impact_value.toFixed(1)}m
+                                              </span>
+                                            </div>
+                                          </div>
+                                          <span style={{ fontSize: '0.73rem', color: 'var(--text-secondary)', lineHeight: 1.35 }}>{c.description}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Top Mitigating Factors (Delay Reducers) */}
+                                {(auditFilter === 'all' || auditFilter === 'mitigating') && predictionExplanation.top_mitigating_factors && predictionExplanation.top_mitigating_factors.length > 0 && (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.74rem', color: 'var(--accent-success)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                                      <TrendingDown size={13} />
+                                      <span>Mitigating Protective Factors:</span>
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                      {predictionExplanation.top_mitigating_factors.map((c, idx) => (
+                                        <div key={idx} className="explain-factor-box" style={{ borderLeft: '3px solid var(--accent-success)' }}>
+                                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.35rem' }}>
+                                            <strong style={{ fontSize: '0.8rem', color: 'var(--text-primary)' }}>{c.factor}</strong>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                              <span className={`explain-badge ${
+                                                c.evidence_type === 'directly_observed_behavior' ? 'observed' :
+                                                c.evidence_type === 'statistical_association' ? 'statistical' :
+                                                c.evidence_type === 'model_contribution' ? 'model' : 'estimated'
+                                              }`}>
+                                                {c.evidence_type === 'directly_observed_behavior' ? 'Direct Observation' :
+                                                 c.evidence_type === 'statistical_association' ? 'Historical Pattern' :
+                                                 c.evidence_type === 'model_contribution' ? 'Model Attribution' : 'Behavioral Estimate'}
+                                              </span>
+                                              <span style={{ fontWeight: 700, color: 'var(--accent-success)', fontSize: '0.82rem', fontFamily: 'var(--font-mono)' }}>
+                                                -{Math.abs(c.impact_value).toFixed(1)}m
+                                              </span>
+                                            </div>
+                                          </div>
+                                          <span style={{ fontSize: '0.73rem', color: 'var(--text-secondary)', lineHeight: 1.35 }}>{c.description}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Historical Context Baseline Comparisons */}
+                                {predictionExplanation.historical_comparisons && predictionExplanation.historical_comparisons.length > 0 && (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                    <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 700 }}>
+                                      Comparison with Personal Historical Baseline:
+                                    </span>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                                      {predictionExplanation.historical_comparisons.map((hc, idx) => (
+                                        <div key={idx} className="explain-comparison-box">
+                                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                                            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{hc.statement}</span>
+                                            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                                              Current: <strong>{String(hc.current_value)}</strong> | Personal Baseline: <strong>{String(hc.historical_baseline)}</strong>
+                                            </span>
+                                          </div>
+                                          <span className="explain-badge statistical">Historical Pattern</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Scientific Guardrails, Causation Disclaimer & Limitations */}
+                                <div className="explain-disclaimer">
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.25rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                                    <ShieldCheck size={14} style={{ color: 'var(--accent-primary)' }} />
+                                    <span>Scientific Notice: Correlation vs. Causation</span>
+                                  </div>
+                                  <p style={{ margin: 0, marginBottom: '0.35rem' }}>{predictionExplanation.causation_disclaimer}</p>
+                                  {predictionExplanation.limitations && predictionExplanation.limitations.length > 0 && (
+                                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                                      <strong>Unmeasured Context & Ambience Limitations:</strong>
+                                      <ul style={{ margin: 0, paddingLeft: '1.1rem' }}>
+                                        {predictionExplanation.limitations.map((lim, lidx) => (
+                                          <li key={lidx}>{lim}</li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                  )}
+                                  <div style={{ marginTop: '0.4rem', fontSize: '0.68rem', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border-color)', paddingTop: '0.3rem', flexWrap: 'wrap', gap: '0.3rem' }}>
+                                    <span>Model Version: <strong>{predictionExplanation.model_version}</strong></span>
+                                    <span>Schema: <strong>{predictionExplanation.feature_schema_version}</strong></span>
+                                    <span>Audited: {new Date(predictionExplanation.explanation_timestamp).toLocaleTimeString()}</span>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         )}
 
@@ -4135,6 +4422,175 @@ export default function App() {
                 <div style={{ marginTop: '0.75rem', padding: '0.65rem 0.85rem', backgroundColor: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
                   <strong>Dynamic Habit Centroid Interpretation:</strong> Centroids are projected back to original feature units and statistically compared to population means to derive human-interpretable habit descriptions (e.g., Phone-Interrupted, Consistently Prepared, Item-Search Delays) without hardcoding cluster IDs.
                 </div>
+              </div>
+
+              {/* CARD: GLOBAL FEATURE IMPORTANCE & EXPLAINABILITY ENGINE (Prompt 2.6) */}
+              <div className="card">
+                <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                  <div>
+                    <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <Sparkles size={20} style={{ color: 'var(--accent-primary)' }} />
+                      Global Feature Importance & Prediction Explainability
+                    </h3>
+                    <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', margin: 0, marginTop: '0.2rem' }}>
+                      Empirical sensitivity analysis across all historical checkouts. Explains which behavioral signals most strongly influence delay predictions.
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span className="status-badge" style={{ backgroundColor: 'rgba(99, 102, 241, 0.12)', color: 'var(--accent-primary)', border: '1px solid rgba(99, 102, 241, 0.3)', fontSize: '0.74rem' }}>
+                      Method: {globalFeatureImportance?.method || 'Permutation Importance'}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => fetchModelIntelligence()}
+                      disabled={importanceLoading}
+                      style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                    >
+                      <RefreshCw size={12} className={importanceLoading ? 'spin' : ''} />
+                      Refresh Weights
+                    </button>
+                  </div>
+                </div>
+
+                {/* Epistemic Guardrail Notice */}
+                <div className="explain-disclaimer" style={{ marginBottom: '1rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.2rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    <ShieldCheck size={14} style={{ color: 'var(--accent-primary)' }} />
+                    <span>Scientific Notice: Global Sensitivity vs. Local Causation</span>
+                  </div>
+                  Global feature weights reflect statistical association and mathematical tree splitting criteria. They demonstrate which inputs reduce uncertainty in the model, not deterministic human causality. Ambient conditions (weather, transit) remain external factors.
+                </div>
+
+                {/* Feature Importance Recharts Visualization */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.25rem', alignItems: 'start' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      Relative Sensitivity Distribution
+                    </span>
+                    <div style={{ height: '280px', backgroundColor: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', padding: '0.5rem' }}>
+                      {globalFeatureImportance?.features && globalFeatureImportance.features.length > 0 ? (
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart
+                            layout="vertical"
+                            data={globalFeatureImportance.features.slice(0, 7).map(f => ({
+                              name: f.human_name || f.feature,
+                              importance: Number(((f.normalized_weight || f.importance) * 100).toFixed(1))
+                            }))}
+                            margin={{ top: 10, right: 25, left: 40, bottom: 5 }}
+                          >
+                            <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                            <XAxis type="number" unit="%" stroke="var(--text-muted)" style={{ fontSize: '11px' }} />
+                            <YAxis type="category" dataKey="name" stroke="var(--text-muted)" style={{ fontSize: '10px' }} width={120} />
+                            <Tooltip
+                              contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', borderRadius: '8px', color: 'var(--text-primary)', fontSize: '12px' }}
+                              formatter={(value: any) => [`${value}%`, 'Relative Sensitivity']}
+                            />
+                            <Bar dataKey="importance" fill="var(--accent-primary)" radius={[0, 4, 4, 0]}>
+                              {globalFeatureImportance.features.slice(0, 7).map((_, index) => (
+                                <Cell key={`cell-${index}`} fill={index === 0 ? 'var(--accent-primary)' : index < 3 ? '#818cf8' : '#a5b4fc'} />
+                              ))}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                          Feature weights will populate upon model evaluation.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Feature Interpretation Table */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      Key Behavioral Sensitivity Drivers
+                    </span>
+                    <div style={{ maxHeight: '280px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                      {(globalFeatureImportance?.features && globalFeatureImportance.features.length > 0) ? (
+                        globalFeatureImportance.features.slice(0, 6).map((feat, fidx) => (
+                          <div key={fidx} className="explain-factor-box">
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <strong style={{ fontSize: '0.8rem', color: 'var(--text-primary)' }}>
+                                {feat.human_name || feat.feature}
+                              </strong>
+                              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--accent-primary)', fontSize: '0.8rem' }}>
+                                {(((feat.normalized_weight || feat.importance) * 100)).toFixed(1)}% weight
+                              </span>
+                            </div>
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                              {feat.feature === 'bag_prepared' ? 'Night-before packing prevents morning doorway bottleneck and forgotten items.' :
+                               feat.feature === 'estimated_prep_duration_min' ? 'Planned prep allocation; tighter windows amplify lateness risk under friction.' :
+                               feat.feature === 'estimated_travel_duration_min' ? 'Commute buffer allowance; determines resilience to unexpected traffic.' :
+                               feat.feature === 'day_of_week_Monday' ? 'First-workday schedule friction; captures Monday morning inertia patterns.' :
+                               feat.feature === 'phone_distraction_freq' ? 'Mid-routine digital interruptions adding unmonitored prep delay.' :
+                               feat.feature === 'item_search_freq' ? 'High-friction item retrieval delaying departure past planned cutoff.' :
+                               'Behavioral and situational input variable impacting model output.'}
+                            </span>
+                          </div>
+                        ))
+                      ) : (
+                        <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                          No feature sensitivity data available.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Audit History Log */}
+                {explanationHistory && explanationHistory.length > 0 && (
+                  <div style={{ marginTop: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                        Recent Explanation Audit Records (Traceability)
+                      </span>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                        Showing last {explanationHistory.length} audited predictions
+                      </span>
+                    </div>
+                    <div style={{ overflowX: 'auto', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
+                      <table className="comparison-table" style={{ fontSize: '0.76rem', margin: 0 }}>
+                        <thead>
+                          <tr>
+                            <th>Prediction ID</th>
+                            <th>Timestamp</th>
+                            <th>Method</th>
+                            <th>Predicted Delay</th>
+                            <th>Top Positive Factor</th>
+                            <th>Top Mitigating Factor</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {explanationHistory.map((rec, ridx) => (
+                            <tr key={ridx}>
+                              <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
+                                {rec.prediction_id.length > 18 ? `${rec.prediction_id.slice(0, 18)}...` : rec.prediction_id}
+                              </td>
+                              <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
+                                {new Date(rec.explanation_timestamp).toLocaleDateString()} {new Date(rec.explanation_timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </td>
+                              <td>
+                                <span className="explain-badge model" style={{ fontSize: '0.65rem' }}>
+                                  {rec.explanation_method}
+                                </span>
+                              </td>
+                              <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-primary)' }}>
+                                {rec.predicted_delay_minutes.toFixed(1)}m
+                              </td>
+                              <td style={{ color: 'var(--accent-danger)' }}>
+                                {rec.top_positive_contributors?.[0]?.factor ? `${rec.top_positive_contributors[0].factor} (+${rec.top_positive_contributors[0].impact_value.toFixed(1)}m)` : 'None'}
+                              </td>
+                              <td style={{ color: 'var(--accent-success)' }}>
+                                {rec.top_mitigating_factors?.[0]?.factor ? `${rec.top_mitigating_factors[0].factor} (-${Math.abs(rec.top_mitigating_factors[0].impact_value).toFixed(1)}m)` : 'None'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

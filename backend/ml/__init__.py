@@ -121,6 +121,26 @@ except ModuleNotFoundError:
         BehavioralInsightsGenerator,
         PersonalizedBehavioralProfiler
     )
+try:
+    from ml.explainability import (
+        ContributingFactor,
+        PredictionExplanation,
+        HistoricalBehavioralComparator,
+        LocalPredictionExplainer,
+        GlobalFeatureImportanceCalculator,
+        ExplainabilityService,
+        CAUSATION_DISCLAIMER
+    )
+except ModuleNotFoundError:
+    from backend.ml.explainability import (
+        ContributingFactor,
+        PredictionExplanation,
+        HistoricalBehavioralComparator,
+        LocalPredictionExplainer,
+        GlobalFeatureImportanceCalculator,
+        ExplainabilityService,
+        CAUSATION_DISCLAIMER
+    )
 
 __all__ = [
     "ValidationConfig",
@@ -179,5 +199,12 @@ __all__ = [
     "HabitDiscoveryService",
     "BehavioralDimensionCalculator",
     "BehavioralInsightsGenerator",
-    "PersonalizedBehavioralProfiler"
+    "PersonalizedBehavioralProfiler",
+    "ContributingFactor",
+    "PredictionExplanation",
+    "HistoricalBehavioralComparator",
+    "LocalPredictionExplainer",
+    "GlobalFeatureImportanceCalculator",
+    "ExplainabilityService",
+    "CAUSATION_DISCLAIMER"
 ]
