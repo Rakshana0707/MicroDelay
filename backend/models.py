@@ -524,17 +524,46 @@ def predict_micro_delay(
         except Exception as e:
             print(f"Failed to load versioned model bundle for user {user_id}: {e}")
 
-    # 2. Fallback to legacy file paths if needed
+    # 2. Fallback to legacy file paths or shared global model if needed
     if rf is None or feature_columns is None:
         paths = get_model_paths(user_id)
         if not (os.path.exists(paths["model"]) and os.path.exists(paths["features"])):
+            if db is not None:
+                try:
+                    try:
+                        from ml.global_model import GlobalModelManager
+                    except ModuleNotFoundError:
+                        from backend.ml.global_model import GlobalModelManager
+                    global_pred = GlobalModelManager.predict_global_delay(
+                        event_name=event_name,
+                        day_of_week=day_of_week,
+                        importance=importance,
+                        bag_prepared=bag_prepared,
+                        estimated_prep_duration_min=estimated_prep_duration_min,
+                        estimated_travel_duration_min=estimated_travel_duration_min
+                    )
+                    global_status = GlobalModelManager.get_global_model_status(db)
+                    if global_pred is not None:
+                        return {
+                            "predicted_delay_min": round(global_pred, 1),
+                            "baseline_predicted_delay_min": 4.5,
+                            "model_used": "global_model",
+                            "model_version": global_status.get("global_model_version", "global_v1"),
+                            "data_provenance": "global_cohort",
+                            "is_personalized_real": False,
+                            "model_availability": "available"
+                        }
+                except Exception as g_err:
+                    print(f"Global model fallback lookup failed: {g_err}")
+
             return {
                 "predicted_delay_min": 4.5,
                 "baseline_predicted_delay_min": 4.5,
                 "model_used": "default_fallback",
                 "model_version": "default_fallback",
                 "data_provenance": "none",
-                "is_personalized_real": False
+                "is_personalized_real": False,
+                "model_availability": "insufficient_data"
             }
         try:
             rf = joblib.load(paths["model"])
@@ -603,6 +632,31 @@ def predict_micro_delay(
         except Exception:
             pass
 
+        personalization_info = {}
+        try:
+            try:
+                from ml.adaptive.personalization import PersonalizationEngine
+            except ModuleNotFoundError:
+                from backend.ml.adaptive.personalization import PersonalizationEngine
+            engine = PersonalizationEngine()
+            real_cnt = 0
+            synth_cnt = 0
+            if db is not None:
+                try:
+                    from database import DepartureLog
+                except ModuleNotFoundError:
+                    from backend.database import DepartureLog
+                real_cnt = db.query(DepartureLog).filter(DepartureLog.user_id == user_id, DepartureLog.is_synthetic == False).count()
+                synth_cnt = db.query(DepartureLog).filter(DepartureLog.user_id == user_id, DepartureLog.is_synthetic == True).count()
+            personalization_info = engine.evaluate_lifecycle(
+                genuine_samples=real_cnt,
+                synthetic_samples=synth_cnt,
+                has_active_personal_model=is_personalized_real,
+                has_active_global_model=True
+            )
+        except Exception:
+            pass
+
         return {
             "predicted_delay_min": round(float(predicted_ml), 1),
             "baseline_predicted_delay_min": round(float(predicted_baseline), 1),
@@ -613,7 +667,8 @@ def predict_micro_delay(
             "is_personalized_real": is_personalized_real,
             "late_probability": round(late_prob, 2) if late_prob is not None else None,
             "risk_category": risk_cat,
-            "model_availability": "available"
+            "model_availability": "available",
+            "personalization_info": personalization_info
         }
     except Exception as e:
         print(f"Error predicting delay for user {user_id}: {e}")
@@ -707,4 +762,84 @@ def get_user_classifier_metrics(user_id: int) -> dict:
         "data_provenance": meta.get("data_provenance"),
         "is_calibrated": meta.get("is_calibrated", True)
     }
+
+
+def train_global_model(db: Session, min_cohort_users: int = 2, min_cohort_samples: int = 10) -> dict:
+    """Train global shared model across consented genuine records."""
+    try:
+        from ml.global_model import GlobalModelManager
+    except ModuleNotFoundError:
+        from backend.ml.global_model import GlobalModelManager
+    return GlobalModelManager.train_global_model(db, min_cohort_users=min_cohort_users, min_cohort_samples=min_cohort_samples)
+
+
+def get_global_model_status(db: Optional[Session] = None) -> dict:
+    """Get status and metrics of the global model."""
+    try:
+        from ml.global_model import GlobalModelManager
+    except ModuleNotFoundError:
+        from backend.ml.global_model import GlobalModelManager
+    return GlobalModelManager.get_global_model_status(db)
+
+
+def get_leave_users_out_benchmark(db: Session) -> dict:
+    """Run or fetch leave-users-out evaluation across consented users."""
+    try:
+        from ml.global_model import GlobalModelManager
+    except ModuleNotFoundError:
+        from backend.ml.global_model import GlobalModelManager
+    return GlobalModelManager.leave_users_out_benchmark(db)
+
+
+def get_user_consent(db: Session, user_id: int) -> dict:
+    """Get user's consent status for global shared training."""
+    try:
+        from database import User, DepartureLog
+    except ModuleNotFoundError:
+        from backend.database import User, DepartureLog
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return {"error": "User not found"}
+
+    eligible_count = db.query(DepartureLog).filter(
+        DepartureLog.user_id == user_id,
+        DepartureLog.is_synthetic == False,
+        DepartureLog.provenance == "real",
+        DepartureLog.observation_status == "valid"
+    ).count()
+
+    return {
+        "user_id": user_id,
+        "consent_to_global_training": bool(getattr(user, "consent_to_global_training", True)),
+        "eligible_genuine_samples": eligible_count,
+        "anonymization_status": "Strict feature-only anonymization (direct identifiers omitted)",
+        "policy_summary": (
+            "Consented genuine departure patterns help improve initial estimates for new users. "
+            "Synthetic data and personal identifiers are never included in shared global models. "
+            "You may opt out at any time."
+        )
+    }
+
+
+def update_user_consent(db: Session, user_id: int, consent: bool) -> dict:
+    """Update user's consent for global shared training."""
+    try:
+        from database import User
+    except ModuleNotFoundError:
+        from backend.database import User
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return {"error": "User not found"}
+
+    user.consent_to_global_training = bool(consent)
+    db.commit()
+    return {
+        "success": True,
+        "user_id": user_id,
+        "consent_to_global_training": user.consent_to_global_training,
+        "message": "Global model training consent preferences updated successfully."
+    }
+
 

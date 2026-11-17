@@ -66,6 +66,16 @@ except ModuleNotFoundError:
         ClassificationEvaluationMetrics
     )
 try:
+    from ml.global_model import (
+        GlobalCohortConfig,
+        GlobalModelManager
+    )
+except ModuleNotFoundError:
+    from backend.ml.global_model import (
+        GlobalCohortConfig,
+        GlobalModelManager
+    )
+try:
     from ml.adaptive import (
         PredictionContext,
         AdaptiveIntelligenceOutput,
@@ -131,5 +141,7 @@ __all__ = [
     "LatenessClassificationConfig",
     "LatenessClassifierSuite",
     "LatenessClassifierManager",
-    "ClassificationEvaluationMetrics"
+    "ClassificationEvaluationMetrics",
+    "GlobalCohortConfig",
+    "GlobalModelManager"
 ]

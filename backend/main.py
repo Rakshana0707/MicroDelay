@@ -160,6 +160,13 @@ class IntelligencePredictRequestSchema(BaseModel):
     estimated_travel_duration: float = 20.0
     event_id: Optional[int] = None
 
+class UserConsentUpdateSchema(BaseModel):
+    consent: bool
+
+class GlobalTrainRequestSchema(BaseModel):
+    min_cohort_users: Optional[int] = 2
+    min_cohort_samples: Optional[int] = 10
+
 # Authentication Endpoints
 @app.post("/api/auth/register", response_model=AuthTokenSchema)
 def register_user(user_in: UserRegisterSchema, db: Session = Depends(get_db)):
@@ -448,7 +455,8 @@ def predict_lateness_risk_get(
         "prediction_timestamp": output.execution_timestamp,
         "confidence_status": output.confidence_status,
         "contributing_factors": output.contributing_factors,
-        "recommended_interventions": output.recommended_interventions
+        "recommended_interventions": output.recommended_interventions,
+        "personalization_info": output.personalization_info
     }
 
 @app.post("/api/intelligence/risk")
@@ -488,13 +496,59 @@ def predict_lateness_risk_post(
         "prediction_timestamp": output.execution_timestamp,
         "confidence_status": output.confidence_status,
         "contributing_factors": output.contributing_factors,
-        "recommended_interventions": output.recommended_interventions
+        "recommended_interventions": output.recommended_interventions,
+        "personalization_info": output.personalization_info
     }
 
 @app.get("/api/models/classifier/metrics")
 def get_classifier_metrics(current_user: User = Depends(get_current_user)):
     """Fetch current user's trained classifier benchmarking and calibration metrics."""
     return models.get_user_classifier_metrics(current_user.id)
+
+# Global-to-Personalized Learning Endpoints (Prompt 2.3)
+@app.get("/api/users/consent")
+def get_user_consent_endpoint(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Fetch current user's consent preferences and eligibility for shared global model training."""
+    return models.get_user_consent(db, current_user.id)
+
+@app.post("/api/users/consent")
+def update_user_consent_endpoint(
+    req: UserConsentUpdateSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update current user's consent for shared global model training (opt-in/opt-out)."""
+    return models.update_user_consent(db, current_user.id, req.consent)
+
+@app.get("/api/models/global/status")
+def get_global_model_status_endpoint(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Fetch the current operational status, version, and validation metrics of the shared global model."""
+    return models.get_global_model_status(db)
+
+@app.post("/api/models/global/train")
+def train_global_model_endpoint(
+    req: Optional[GlobalTrainRequestSchema] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Train or retrain the global shared model across all consented genuine user observations."""
+    min_users = req.min_cohort_users if req and req.min_cohort_users is not None else 2
+    min_samples = req.min_cohort_samples if req and req.min_cohort_samples is not None else 10
+    return models.train_global_model(db, min_cohort_users=min_users, min_cohort_samples=min_samples)
+
+@app.get("/api/benchmarks/leave-users-out")
+def get_leave_users_out_benchmark_endpoint(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Run and return the leave-users-out evaluation experiment across all consented genuine users."""
+    return models.get_leave_users_out_benchmark(db)
 
 @app.post("/api/intelligence/predict")
 def predict_adaptive_intelligence_post(

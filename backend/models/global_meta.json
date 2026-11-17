@@ -1,0 +1,34 @@
+{
+  "global_model_version": "global_ran_20261117_032142",
+  "model_type": "RandomForestRegressor",
+  "trained_at": "2026-11-17T03:21:42.117121+00:00",
+  "cohort_users_count": 2,
+  "cohort_samples_count": 12,
+  "train_samples": 8,
+  "val_samples": 2,
+  "test_samples": 2,
+  "validation_mae": 0.117,
+  "test_mae": 0.883,
+  "test_rmse": 0.883,
+  "test_r2": 0.0,
+  "median_absolute_error": 0.883,
+  "pct_within_5min": 100.0,
+  "pct_within_10min": 100.0,
+  "feature_names": [
+    "num__estimated_prep_duration_min",
+    "num__estimated_travel_duration_min",
+    "num__bag_prepared",
+    "cat__event_name_Class",
+    "cat__day_of_week_Monday",
+    "cat__importance_medium"
+  ],
+  "candidate_eval": {
+    "HistGradientBoostingRegressor": {
+      "val_mae": 0.125
+    },
+    "RandomForestRegressor": {
+      "val_mae": 0.11749999999999972
+    }
+  },
+  "is_active": true
+}

@@ -116,6 +116,7 @@ class AdaptiveIntelligenceOutput:
     model_type: str = "statistical_baseline"
     model_availability: str = ModelAvailability.AVAILABLE.value
     data_quality_status: Dict[str, Any] = field(default_factory=dict)
+    personalization_info: Dict[str, Any] = field(default_factory=dict)
     fallback_applied: bool = False
     component_status: Dict[str, str] = field(default_factory=dict)
     execution_timestamp: str = field(
@@ -137,6 +138,7 @@ class AdaptiveIntelligenceOutput:
             "model_type": self.model_type,
             "model_availability": self.model_availability,
             "data_quality_status": self.data_quality_status,
+            "personalization_info": self.personalization_info,
             "fallback_applied": self.fallback_applied,
             "component_status": self.component_status,
             "execution_timestamp": self.execution_timestamp,
@@ -157,5 +159,6 @@ class AdaptiveIntelligenceOutput:
             "late_probability": round(self.late_probability, 2) if self.late_probability is not None else None,
             "risk_category": self.risk_category,
             "model_availability": self.model_availability,
-            "confidence_status": self.confidence_status
+            "confidence_status": self.confidence_status,
+            "personalization_info": self.personalization_info
         }

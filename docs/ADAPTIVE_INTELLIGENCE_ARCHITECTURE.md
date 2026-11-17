@@ -221,3 +221,64 @@ Calibrated probabilities are mapped to actionable risk thresholds:
 - **Independence:** Regression delay models and classification risk models are persisted independently (`clf_model_user_{id}.pkl`, `clf_preprocessor_user_{id}.pkl`, `clf_feats_user_{id}.pkl`, `clf_meta_user_{id}.pkl`), allowing isolated upgrades, retraining, and rollbacks.
 - **API Endpoints:** Dedicated GET/POST `/api/intelligence/risk` and `/api/models/classifier/metrics`.
 
+---
+
+## 7. Global-to-Personalized Learning Architecture (Prompt 2.3)
+
+### 7.1 Cold-Start Mitigation & Prediction Hierarchy
+Newly registered accounts lack genuine personal observations ($N_{\text{real}} = 0$). Relying solely on per-user models either forces synthetic-only training or fails completely. MicroDelay solves this through a three-level learning architecture:
+1. **Level A — Global Cohort Model:**
+   - Learns cross-user behavioral patterns and departure heuristics across consenting users' genuine observations.
+   - Serves initial predictions during cold start when individual historical records are insufficient.
+2. **Level B — Personalized Model:**
+   - Trains exclusively on an individual user's genuine records ($N_{\text{real}} \ge 8$).
+   - Captures idiosyncratic morning routines, personal preparation bias, and specific event vulnerabilities.
+3. **Level C — Dynamic Hybrid Blended Prediction:**
+   - Dynamically blends global population patterns with emergent individual patterns:
+     $$\hat{y}_{\text{hybrid}} = \alpha \cdot \hat{y}_{\text{global}} + (1 - \alpha) \cdot \hat{y}_{\text{personal}}$$
+   - $\alpha \in [0.0, 1.0]$ is computed dynamically rather than assigned as a static heuristic.
+
+### 7.2 Dynamic Blending Weight ($\alpha$) Formulation
+The blending weight $\alpha$ dynamically transitions from global reliance ($\alpha \to 1.0$) to individual autonomy ($\alpha \to 0.0$):
+$$\alpha = \text{clip}\left( \left(1.0 - \frac{N_{\text{real}}}{8}\right) \cdot \mu_{\text{perf}} \cdot \mu_{\text{stab}}, \; 0.05, \; 0.95 \right)$$
+where:
+- **Sample Maturity Base:** $1.0 - \frac{N_{\text{real}}}{8}$ smoothly steps down weight as genuine observations accumulate toward the promotion threshold ($N=8$).
+- **Performance Multiplier ($\mu_{\text{perf}}$):** If personal model validation MAE exceeds global model validation MAE ($\text{MAE}_{\text{personal}} > \text{MAE}_{\text{global}}$), $\mu_{\text{perf}} > 1.0$ increases global reliance; when personal model outperforms global, $\mu_{\text{perf}} < 1.0$ accelerates personal adoption.
+- **Stability Multiplier ($\mu_{\text{stab}}$):** Elevated behavioral variance ($\sigma_{\text{delay}} > 6.0$ minutes) dampens personal reliance and leverages global smoothing; low variance ($\sigma_{\text{delay}} < 2.5$ minutes) signals stable routines, accelerating personal weighting.
+
+### 7.3 Lifecycle States & Cold-Start Progression
+The personalization engine transitions users across 6 explicit lifecycle phases:
+- `new_user`: 0 genuine samples, global model unavailable (serves fallback baseline 4.5m).
+- `collecting_history`: User is actively logging checkouts, but genuine samples remain below cold-start activation threshold ($N_{\text{real}} < 3$) and no global model exists.
+- `global_prediction`: $N_{\text{real}} < 3$ or personal model inactive, but consented global cohort model is active ($\alpha = 1.0$).
+- `personalizing`: $3 \le N_{\text{real}} < 8$; hybrid dynamic blending is active, smoothly shifting $\alpha$ as genuine samples accumulate.
+- `personalized`: $N_{\text{real}} \ge 8$; personal model is fully qualified, approved, and active ($\alpha = 0.0$).
+- `insufficient_data`: Zero records and missing artifacts; graceful baseline fallback.
+
+### 7.4 Strict Privacy & Security Safeguards
+Cross-user learning is guarded by mathematical privacy boundaries:
+1. **Explicit User Consent & Opt-Out:**
+   - Controlled via `User.consent_to_global_training: bool` (default: True with 1-click opt-out toggle).
+   - Opting out immediately excludes the user's records from all subsequent global training datasets.
+2. **Direct Identifier Scrubbing:**
+   - Identity columns (`user_id`, `username`, `email`, personal tags) are strictly excluded from training feature vectors.
+   - Vectorization uses purely anonymized contextual features (`day_of_week`, `event_importance`, `bag_prepared`, `estimated_prep_duration_min`, `estimated_travel_duration_min`).
+3. **Synthetic Quarantine:**
+   - Synthetic demonstration observations (`is_synthetic == True`) are strictly filtered out (`is_synthetic == False` AND `provenance == 'real'`). Synthetic data never contaminates global cohort models.
+4. **Minimum Cohort Threshold ($K$-Anonymity Guard):**
+   - Global model training aborts safely unless at least 2 distinct consented users and at least 10 genuine observations are present, preventing single-user reverse-engineering.
+
+### 7.5 Leave-Users-Out Cross-Validation & Scientific Generalization
+To prove that global models generalize to unseen individuals without demographic stereotyping:
+- **Evaluation Protocol:** For each consenting user $u \in U$, a model is trained on observations from $U \setminus \{u\}$ and tested strictly on $u$'s held-out records.
+- **Metrics Tracked:** Individual holdout MAE and cohort-level aggregated transferability MAE.
+- **Group Evaluation:** Leave-users-out performance is segmented across user profile groups (Student, Teacher, Professor, IT Professional) to empirically confirm cross-user transferability.
+
+### 7.6 API & UI Integration
+- `GET /api/users/consent` & `POST /api/users/consent`: Inspect and toggle global data sharing consent.
+- `GET /api/models/global/status`: Inspect global model availability, version, cohort size, and validation metrics.
+- `POST /api/models/global/train`: Train and safely evaluate a new candidate global cohort model.
+- `GET /api/benchmarks/leave-users-out`: Retrieve out-of-sample transferability and group cross-validation results.
+- `frontend/src/App.tsx`: Real-time lifecycle badge, maturity progress meter ($N_{\text{real}}/8$), dynamic hybrid blending breakdown bar, cohort benchmarking table, and privacy consent controls.
+
+

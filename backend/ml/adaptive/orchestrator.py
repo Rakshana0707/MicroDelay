@@ -8,6 +8,7 @@ a unified, failure-isolated prediction pipeline.
 import time
 import logging
 from typing import Optional, Dict, Any, List
+import numpy as np
 from sqlalchemy.orm import Session
 
 from .context import PredictionContext
@@ -118,8 +119,40 @@ class AdaptiveIntelligenceOrchestrator:
             quality_notes=[]
         )
 
-        # 3. Model Availability State Assessment
-        if not is_sufficient and real_count == 0 and synth_count == 0:
+        # 3. Global Model & Lifecycle Assessment (Prompt 2.3)
+        try:
+            from ml.global_model import GlobalModelManager
+        except ModuleNotFoundError:
+            from backend.ml.global_model import GlobalModelManager
+
+        has_active_global_model = False
+        global_mae = None
+        global_status = {}
+        if db is not None:
+            global_status = GlobalModelManager.get_global_model_status(db=db)
+            has_active_global_model = global_status.get("is_available", False)
+            global_mae = global_status.get("validation_mae")
+
+        # Behavioral stability: calculate std of recent delays
+        delay_std = None
+        if recent_logs and len(recent_logs) >= 2:
+            delays = [float(getattr(l, "total_delay_min", 0.0) or 0.0) for l in recent_logs]
+            delay_std = float(np.std(delays))
+
+        # Check personal model status
+        has_active_personal_model = (real_count >= 8) and is_sufficient
+
+        lifecycle_info = self.personalization_engine.evaluate_lifecycle(
+            genuine_samples=real_count,
+            synthetic_samples=synth_count,
+            has_active_personal_model=has_active_personal_model,
+            has_active_global_model=has_active_global_model,
+            personal_mae=None,
+            global_mae=global_mae,
+            delay_std=delay_std
+        )
+
+        if lifecycle_info["learning_mode"] == "insufficient_data":
             model_availability = ModelAvailability.INSUFFICIENT_DATA.value
         else:
             model_availability = ModelAvailability.AVAILABLE.value
@@ -132,6 +165,18 @@ class AdaptiveIntelligenceOrchestrator:
         validation_mae = None
         fallback_applied = False
 
+        global_pred = None
+        if has_active_global_model:
+            global_pred = GlobalModelManager.predict_global_delay(
+                event_name=context.event_name,
+                day_of_week=context.day_of_week,
+                importance=context.event_importance,
+                bag_prepared=context.bag_prepared,
+                estimated_prep_duration_min=context.estimated_prep_duration,
+                estimated_travel_duration_min=context.estimated_travel_duration
+            )
+
+        personal_pred = None
         try:
             try:
                 from models import predict_micro_delay
@@ -148,21 +193,43 @@ class AdaptiveIntelligenceOrchestrator:
                 estimated_travel_duration_min=context.estimated_travel_duration,
                 db=db
             )
-            predicted_delay = float(pred_res.get("predicted_delay_min", 4.5))
+            raw_ml = pred_res.get("predicted_delay_min")
+            if raw_ml is not None:
+                personal_pred = float(raw_ml)
             baseline_delay = float(pred_res.get("baseline_predicted_delay_min", 4.5))
             model_type = str(pred_res.get("model_used", "random_forest"))
             model_version = str(pred_res.get("model_version", context.active_model_version or "v1"))
-            if "fallback" in model_type:
+            if "fallback" in model_type and not has_active_global_model:
                 fallback_applied = True
             component_status["regression"] = "success"
         except Exception as e:
             logger.error("Regression model execution failed for user_id=%d: %s", context.user_id, e)
             fallback_applied = True
-            model_availability = ModelAvailability.FAILED.value
-            predicted_delay = 4.5
-            baseline_delay = 4.5
+            if not has_active_global_model:
+                model_availability = ModelAvailability.FAILED.value
             component_status["regression"] = f"failed: {e}"
-            warnings.append("Regression model prediction failed; empirical fallback applied.")
+            warnings.append(f"Individual model execution error: {e}")
+
+        # Blend final prediction based on lifecycle state & alpha
+        alpha = lifecycle_info.get("alpha", 1.0)
+        predicted_delay = self.personalization_engine.blend_hybrid_prediction(
+            global_pred=global_pred,
+            personal_pred=personal_pred,
+            baseline_pred=baseline_delay,
+            alpha=alpha
+        )
+
+        lifecycle_info["global_prediction"] = global_pred
+        lifecycle_info["personal_prediction"] = personal_pred
+        lifecycle_info["hybrid_prediction"] = predicted_delay
+        lifecycle_info["global_model_version"] = global_status.get("global_model_version")
+        lifecycle_info["personal_model_version"] = model_version
+
+        if lifecycle_info["learning_mode"] == "personalizing":
+            model_type = "hybrid_blended"
+        elif lifecycle_info["is_global_used"]:
+            model_type = "global_model"
+            model_version = global_status.get("global_model_version") or model_version
 
         # 5. Isolated Subcomponent Execution
 
@@ -277,6 +344,7 @@ class AdaptiveIntelligenceOrchestrator:
             model_type=model_type,
             model_availability=model_availability,
             data_quality_status=data_quality.to_dict(),
+            personalization_info=lifecycle_info,
             fallback_applied=fallback_applied,
             component_status=component_status,
             warnings=warnings
