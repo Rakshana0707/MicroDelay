@@ -873,4 +873,113 @@ def get_clustering_benchmark(db: Session) -> dict:
     return HabitDiscoveryService.get_clustering_benchmark_report(db)
 
 
+def get_user_behavioral_profile(db: Session, user_id: int, provenance: str = "real", force_refresh: bool = False) -> dict:
+    """Fetch cached or newly calculated personal behavioral profile for user."""
+    try:
+        from ml.profiling import PersonalizedBehavioralProfiler
+    except ModuleNotFoundError:
+        from backend.ml.profiling import PersonalizedBehavioralProfiler
+
+    return PersonalizedBehavioralProfiler.get_or_create_profile(
+        user_id=user_id,
+        db=db,
+        provenance=provenance,
+        force_refresh=force_refresh
+    )
+
+
+def get_user_profile_history(db: Session, user_id: int, limit: int = 10) -> list:
+    """Retrieve history of behavioral profile snapshots for user."""
+    try:
+        from ml.profiling import PersonalizedBehavioralProfiler
+    except ModuleNotFoundError:
+        from backend.ml.profiling import PersonalizedBehavioralProfiler
+
+    return PersonalizedBehavioralProfiler.get_profile_history(
+        user_id=user_id,
+        db=db,
+        limit=limit
+    )
+
+
+def compare_user_profiles(
+    db: Session,
+    user_id: int,
+    profile_id_a: Optional[str] = None,
+    profile_id_b: Optional[str] = None,
+    window_a: Optional[str] = None,
+    window_b: Optional[str] = None
+) -> dict:
+    """Compare two profile snapshots or rolling time windows for user."""
+    try:
+        from ml.profiling import PersonalizedBehavioralProfiler
+        from database import BehavioralProfileSnapshot
+    except ModuleNotFoundError:
+        from backend.ml.profiling import PersonalizedBehavioralProfiler
+        from backend.database import BehavioralProfileSnapshot
+
+    # Case 1: Compare by explicit snapshot IDs
+    if profile_id_a and profile_id_b:
+        snap_a = db.query(BehavioralProfileSnapshot).filter(
+            BehavioralProfileSnapshot.profile_id == profile_id_a,
+            BehavioralProfileSnapshot.user_id == user_id
+        ).first()
+        snap_b = db.query(BehavioralProfileSnapshot).filter(
+            BehavioralProfileSnapshot.profile_id == profile_id_b,
+            BehavioralProfileSnapshot.user_id == user_id
+        ).first()
+
+        if not snap_a or not snap_b:
+            return {"error": "One or both profile snapshots not found or not owned by user."}
+
+        dict_a = {
+            "profile_id": snap_a.profile_id,
+            "generated_at": snap_a.generated_at,
+            "observation_count": snap_a.observation_count,
+            "dimensions": json.loads(snap_a.behavioral_metrics)
+        }
+        dict_b = {
+            "profile_id": snap_b.profile_id,
+            "generated_at": snap_b.generated_at,
+            "observation_count": snap_b.observation_count,
+            "dimensions": json.loads(snap_b.behavioral_metrics)
+        }
+        return PersonalizedBehavioralProfiler.compare_profile_periods(dict_a, dict_b)
+
+    # Case 2: Compare rolling windows within current active profile
+    current_profile = PersonalizedBehavioralProfiler.get_or_create_profile(user_id, db)
+    dims = current_profile.get("dimensions", {})
+
+    win_a_name = window_a or "all_time"
+    win_b_name = window_b or "window_30d"
+
+    def extract_win(name):
+        if name in ("7d", "window_7d"):
+            w = dims.get("window_7d", {})
+            return w.get("metrics") or dims.get("all_time", {})
+        elif name in ("30d", "window_30d"):
+            w = dims.get("window_30d", {})
+            return w.get("metrics") or dims.get("all_time", {})
+        else:
+            return dims.get("all_time", {})
+
+    metrics_a = extract_win(win_a_name)
+    metrics_b = extract_win(win_b_name)
+
+    dict_a = {
+        "profile_id": f"window_{win_a_name}",
+        "generated_at": current_profile.get("generated_at"),
+        "observation_count": current_profile.get("observation_count", 0),
+        "dimensions": metrics_a
+    }
+    dict_b = {
+        "profile_id": f"window_{win_b_name}",
+        "generated_at": current_profile.get("generated_at"),
+        "observation_count": current_profile.get("observation_count", 0),
+        "dimensions": metrics_b
+    }
+    return PersonalizedBehavioralProfiler.compare_profile_periods(dict_a, dict_b)
+
+
+
 

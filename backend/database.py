@@ -169,6 +169,25 @@ class UserClusterProfile(Base):
     user = relationship("User", backref="cluster_profiles")
 
 
+class BehavioralProfileSnapshot(Base):
+    __tablename__ = "behavioral_profiles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(String, unique=True, index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    profile_version = Column(String, nullable=False)
+    generated_at = Column(String, nullable=False)
+    observation_window = Column(String, nullable=False)  # "all_time", "30d", "7d"
+    observation_count = Column(Integer, nullable=False)
+    data_provenance = Column(String, nullable=False)  # "real", "synthetic"
+    behavioral_metrics = Column(Text, nullable=False)  # JSON dict covering dimensions A-F
+    cluster_reference = Column(String, nullable=True)  # e.g. "Phone-Interrupted Preparation"
+    confidence_or_sufficiency_status = Column(String, nullable=False)  # "sufficient", "gathering_history", "insufficient_data"
+    insights = Column(Text, nullable=False)  # JSON list of evidence-backed strings
+
+    user = relationship("User", backref="behavioral_profiles")
+
+
 def migrate_db(db_engine=None):
     """Safely migrate SQLite database schema to include provenance fields and backfill legacy records."""
     target_engine = db_engine or engine
@@ -258,6 +277,24 @@ def migrate_db(db_engine=None):
                 provenance VARCHAR NOT NULL DEFAULT 'real',
                 cluster_model_version VARCHAR NOT NULL,
                 generated_at VARCHAR NOT NULL
+            )
+        """))
+
+        # Create behavioral_profiles table if not present (Prompt 2.5)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS behavioral_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                profile_id VARCHAR UNIQUE NOT NULL,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                profile_version VARCHAR NOT NULL,
+                generated_at VARCHAR NOT NULL,
+                observation_window VARCHAR NOT NULL,
+                observation_count INTEGER NOT NULL,
+                data_provenance VARCHAR NOT NULL,
+                behavioral_metrics TEXT NOT NULL,
+                cluster_reference VARCHAR,
+                confidence_or_sufficiency_status VARCHAR NOT NULL,
+                insights TEXT NOT NULL
             )
         """))
 

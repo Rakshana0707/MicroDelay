@@ -439,6 +439,127 @@ interface ClassifierMetricsData {
   is_calibrated?: boolean;
 }
 
+// Personalized Behavioral Profiling Interfaces (Prompt 2.5)
+interface ProfileDimensionPreparation {
+  avg_actual_prep_min: number;
+  prep_bias_min: number;
+  prep_duration_std: number;
+  prep_consistency_score: number;
+  observation_count: number;
+}
+
+interface ProfileDimensionDistraction {
+  phone_usage_frequency: number;
+  avg_phone_interruption_min: number;
+  common_interruption_period: string;
+  distraction_trend?: string;
+  observation_count: number;
+}
+
+interface ProfileDimensionOrganization {
+  item_search_frequency: number;
+  avg_item_search_delay_min: number;
+  bag_prepared_consistency: number;
+  recurring_missing_item_pattern: string;
+  observation_count: number;
+}
+
+interface ProfileDimensionTimeEstimation {
+  prep_estimation_bias_min: number;
+  travel_estimation_bias_min: number;
+  event_specific_errors?: Record<string, number>;
+  event_specific_prep_bias?: Record<string, number>;
+  observation_count: number;
+}
+
+interface ProfileDimensionDeparture {
+  avg_lateness_min: number;
+  lateness_frequency: number;
+  early_departure_frequency: number;
+  day_specific_patterns: Record<string, { avg_delay_min: number; lateness_rate: number; sample_count: number }>;
+  observation_count: number;
+}
+
+interface ProfileDimensionRoutine {
+  schedule_adherence_rate: number;
+  weekday_vs_weekend_variation: number;
+  recent_departure_change_min: number;
+  observation_count: number;
+}
+
+interface ProfileDimensions {
+  preparation: ProfileDimensionPreparation;
+  distraction: ProfileDimensionDistraction;
+  organization: ProfileDimensionOrganization;
+  time_estimation: ProfileDimensionTimeEstimation;
+  departure: ProfileDimensionDeparture;
+  routine_consistency: ProfileDimensionRoutine;
+}
+
+interface ProfileInsight {
+  dimension: string;
+  finding?: string;
+  statement: string;
+  factual_evidence: string;
+  supporting_metric: string;
+}
+
+interface BehavioralProfileData {
+  profile_id: string;
+  user_id: number;
+  profile_version: string;
+  generated_at: string;
+  observation_count: number;
+  data_provenance: string;
+  confidence_or_sufficiency_status: 'insufficient_data' | 'gathering_history' | 'sufficient' | string;
+  cluster_reference?: string | null;
+  dimensions: {
+    all_time: ProfileDimensions;
+    window_30d?: {
+      is_sufficient: boolean;
+      sample_count: number;
+      metrics: ProfileDimensions;
+    };
+    window_7d?: {
+      is_sufficient: boolean;
+      sample_count: number;
+      metrics: ProfileDimensions;
+    };
+  };
+  insights: ProfileInsight[];
+  cached?: boolean;
+}
+
+interface ProfileHistoryItem {
+  profile_id: string;
+  profile_version: string;
+  generated_at: string;
+  observation_count: number;
+  data_provenance: string;
+  cluster_reference?: string | null;
+  confidence_or_sufficiency_status: string;
+  summary_metrics: {
+    prep_bias_min: number;
+    avg_lateness_min: number;
+    schedule_adherence_rate: number;
+  };
+  insights: ProfileInsight[];
+}
+
+interface ProfileComparisonData {
+  period_a: { profile_id: string; generated_at: string; observation_count: number };
+  period_b: { profile_id: string; generated_at: string; observation_count: number };
+  deltas: {
+    prep_bias_min_delta: number;
+    avg_lateness_min_delta: number;
+    phone_usage_frequency_delta: number;
+    bag_prepared_consistency_delta: number;
+    schedule_adherence_delta: number;
+  };
+  overall_trend: 'improving' | 'regressing' | 'stable' | string;
+  trend_summary: string;
+}
+
 // Profile-specific checkout prompt tags mapping
 const PROFILE_TAGS: Record<string, { oneLast: string; finding: string; phone: string; waiting: string }> = {
   student: {
@@ -481,7 +602,7 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
 
   // Tab State
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'comparison' | 'history' | 'routines'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'comparison' | 'profile' | 'history' | 'routines'>('dashboard');
   
   // Data States
   const [events, setEvents] = useState<EventTemplate[]>([]);
@@ -541,6 +662,14 @@ export default function App() {
   const [clusterBenchmark, setClusterBenchmark] = useState<ClusterBenchmarkData | null>(null);
   const [clusterLoading, setClusterLoading] = useState<boolean>(false);
   const [clusterRetraining, setClusterRetraining] = useState<boolean>(false);
+
+  // Personalized Behavioral Profiling States (Prompt 2.5)
+  const [behavioralProfile, setBehavioralProfile] = useState<BehavioralProfileData | null>(null);
+  const [profileHistory, setProfileHistory] = useState<ProfileHistoryItem[]>([]);
+  const [profileComparison, setProfileComparison] = useState<ProfileComparisonData | null>(null);
+  const [profileLoading, setProfileLoading] = useState<boolean>(false);
+  const [profileRefreshing, setProfileRefreshing] = useState<boolean>(false);
+  const [selectedProfileWindow, setSelectedProfileWindow] = useState<'all_time' | '30d' | '7d'>('all_time');
 
   // References for Simulator Clock
   const clockIntervalRef = useRef<any>(null);
@@ -817,6 +946,7 @@ export default function App() {
 
       // Load model intelligence artifacts in background
       fetchModelIntelligence(token);
+      fetchBehavioralProfile(token);
 
     } catch (e: any) {
       console.error(e);
@@ -938,6 +1068,69 @@ export default function App() {
     }
   };
 
+  // 7. Fetch Personalized Behavioral Profile (Prompt 2.5)
+  const fetchBehavioralProfile = async (overrideToken?: string) => {
+    const activeToken = overrideToken || token;
+    if (!activeToken) return;
+    const headers = { 'Authorization': `Bearer ${activeToken}` };
+    setProfileLoading(true);
+
+    try {
+      const pRes = await fetch(`${BACKEND_URL}/api/intelligence/profile`, { headers });
+      if (pRes.ok) {
+        const pData = await pRes.json();
+        setBehavioralProfile(pData);
+      }
+    } catch (e) {
+      console.warn("Could not fetch behavioral profile:", e);
+    }
+
+    try {
+      const hRes = await fetch(`${BACKEND_URL}/api/intelligence/profile/history`, { headers });
+      if (hRes.ok) {
+        const hData = await hRes.json();
+        setProfileHistory(hData);
+      }
+    } catch (e) {
+      console.warn("Could not fetch profile history:", e);
+    }
+
+    try {
+      const cRes = await fetch(`${BACKEND_URL}/api/intelligence/profile/compare?window_a=all_time&window_b=7d`, { headers });
+      if (cRes.ok) {
+        const cData = await cRes.json();
+        setProfileComparison(cData);
+      }
+    } catch (e) {
+      console.warn("Could not fetch profile comparison:", e);
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const handleRefreshProfile = async () => {
+    if (!token) return;
+    setProfileRefreshing(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/intelligence/profile/refresh`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.detail || data.message || "Failed to recalculate behavioral profile.");
+      } else {
+        setBehavioralProfile(data);
+        await fetchBehavioralProfile();
+      }
+    } catch (e: any) {
+      alert(`Error refreshing behavioral profile: ${e.message}`);
+    } finally {
+      setProfileRefreshing(false);
+    }
+  };
+
+
   const handleRetrainClusters = async () => {
     if (!token) return;
     setClusterRetraining(true);
@@ -1046,6 +1239,7 @@ export default function App() {
     setIsRefreshing(true);
     await fetchData();
     await fetchModelIntelligence();
+    await fetchBehavioralProfile();
     setIsRefreshing(false);
   };
 
@@ -1587,6 +1781,16 @@ export default function App() {
             >
               <BrainCircuit size={16} />
               Model Intelligence
+            </button>
+            <button 
+              className={`tab-btn ${activeTab === 'profile' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTab('profile');
+                fetchBehavioralProfile();
+              }}
+            >
+              <UserCheck size={16} />
+              Behavioral Profile
             </button>
             <button 
               className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
@@ -3934,6 +4138,717 @@ export default function App() {
               </div>
             </div>
           )}
+
+          {/* TAB: PERSONALIZED BEHAVIORAL PROFILE (Prompt 2.5) */}
+          {activeTab === 'profile' && (
+            <div className="tab-pane active" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+              {/* Profile Header & Metadata Card */}
+              <div className="card">
+                <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                  <div>
+                    <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <UserCheck size={20} style={{ color: 'var(--accent-primary)' }} />
+                      Personalized Behavioral Profiling Engine
+                    </h3>
+                    <span style={{ fontSize: '0.84rem', color: 'var(--text-muted)' }}>
+                      Continuously updated behavioral profile across 6 core dimensions, learned strictly from your genuine departure timeline.
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    {/* Sufficiency Badge */}
+                    {behavioralProfile?.confidence_or_sufficiency_status === 'sufficient' ? (
+                      <span className="status-badge" style={{ backgroundColor: 'rgba(16, 185, 129, 0.15)', color: 'var(--accent-success)', border: '1px solid rgba(16, 185, 129, 0.35)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <CheckCircle size={13} />
+                        Stable Profile ({behavioralProfile.observation_count} checkouts)
+                      </span>
+                    ) : behavioralProfile?.confidence_or_sufficiency_status === 'gathering_history' ? (
+                      <span className="status-badge" style={{ backgroundColor: 'rgba(99, 102, 241, 0.15)', color: 'var(--accent-primary)', border: '1px solid rgba(99, 102, 241, 0.35)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <Activity size={13} />
+                        Calibrating ({behavioralProfile.observation_count}/8 checkouts)
+                      </span>
+                    ) : (
+                      <span className="status-badge" style={{ backgroundColor: 'rgba(245, 158, 11, 0.15)', color: 'var(--accent-warning)', border: '1px solid rgba(245, 158, 11, 0.35)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <AlertTriangle size={13} />
+                        Insufficient Data ({behavioralProfile?.observation_count ?? 0}/3 checkouts)
+                      </span>
+                    )}
+
+                    {/* Data Provenance Badge */}
+                    <span className="status-badge" style={{
+                      backgroundColor: behavioralProfile?.data_provenance === 'real' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(245, 158, 11, 0.1)',
+                      color: behavioralProfile?.data_provenance === 'real' ? 'var(--accent-success)' : 'var(--accent-warning)',
+                      border: `1px solid ${behavioralProfile?.data_provenance === 'real' ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)'}`
+                    }}>
+                      {behavioralProfile?.data_provenance === 'real' ? 'Genuine Checkouts' : 'Synthetic Demonstration'}
+                    </span>
+
+                    {/* Refresh Profile Button */}
+                    <button
+                      className="btn-secondary"
+                      style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                      onClick={handleRefreshProfile}
+                      disabled={profileRefreshing || profileLoading}
+                    >
+                      <RefreshCw size={13} className={profileRefreshing ? 'spin' : ''} />
+                      {profileRefreshing ? 'Recalculating...' : 'Refresh Profile'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Metadata & Associated Habit Cluster */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem', marginTop: '1rem', padding: '0.75rem', backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', fontSize: '0.8rem' }}>
+                  <div>
+                    <span style={{ color: 'var(--text-muted)', display: 'block' }}>Profile Snapshot ID</span>
+                    <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
+                      {behavioralProfile?.profile_id ?? 'Initializing...'}
+                    </strong>
+                  </div>
+                  <div>
+                    <span style={{ color: 'var(--text-muted)', display: 'block' }}>Calculated Timestamp</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
+                      {behavioralProfile?.generated_at ? new Date(behavioralProfile.generated_at).toLocaleString() : 'N/A'}
+                    </span>
+                  </div>
+                  <div>
+                    <span style={{ color: 'var(--text-muted)', display: 'block' }}>Discovered Habit Persona</span>
+                    <span style={{ color: 'var(--accent-primary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                      <Sparkles size={13} />
+                      {behavioralProfile?.cluster_reference ?? clusterProfile?.cluster_name ?? 'The Calibrated Commuter'}
+                    </span>
+                  </div>
+                  <div>
+                    <span style={{ color: 'var(--text-muted)', display: 'block' }}>Cache State</span>
+                    <span style={{ color: behavioralProfile?.cached ? 'var(--text-secondary)' : 'var(--accent-success)' }}>
+                      {behavioralProfile?.cached ? 'Cached Snapshot (Auto-syncs on >= 3 logs)' : 'Newly Computed Snapshot'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Rolling Window Selector */}
+                <div style={{ marginTop: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                      Observation Window:
+                    </span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                      Multi-window analysis suppresses misleading trends when sample size is low
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '0.4rem', backgroundColor: 'var(--bg-primary)', padding: '0.25rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+                    <button
+                      className="tab-btn"
+                      style={{
+                        padding: '0.35rem 0.75rem',
+                        fontSize: '0.8rem',
+                        borderRadius: 'var(--radius-sm)',
+                        backgroundColor: selectedProfileWindow === 'all_time' ? 'var(--accent-primary)' : 'transparent',
+                        color: selectedProfileWindow === 'all_time' ? '#fff' : 'var(--text-secondary)',
+                        border: 'none',
+                        cursor: 'pointer'
+                      }}
+                      onClick={() => setSelectedProfileWindow('all_time')}
+                    >
+                      All-Time Baseline ({behavioralProfile?.observation_count ?? 0})
+                    </button>
+                    <button
+                      className="tab-btn"
+                      style={{
+                        padding: '0.35rem 0.75rem',
+                        fontSize: '0.8rem',
+                        borderRadius: 'var(--radius-sm)',
+                        backgroundColor: selectedProfileWindow === '30d' ? 'var(--accent-primary)' : 'transparent',
+                        color: selectedProfileWindow === '30d' ? '#fff' : 'var(--text-secondary)',
+                        border: 'none',
+                        cursor: behavioralProfile?.dimensions?.window_30d?.is_sufficient ? 'pointer' : 'not-allowed',
+                        opacity: behavioralProfile?.dimensions?.window_30d?.is_sufficient ? 1 : 0.45
+                      }}
+                      onClick={() => {
+                        if (behavioralProfile?.dimensions?.window_30d?.is_sufficient) {
+                          setSelectedProfileWindow('30d');
+                        }
+                      }}
+                      title={!behavioralProfile?.dimensions?.window_30d?.is_sufficient ? "Requires at least 3 checkouts in the last 30 days" : undefined}
+                    >
+                      Last 30 Days ({behavioralProfile?.dimensions?.window_30d?.sample_count ?? 0})
+                    </button>
+                    <button
+                      className="tab-btn"
+                      style={{
+                        padding: '0.35rem 0.75rem',
+                        fontSize: '0.8rem',
+                        borderRadius: 'var(--radius-sm)',
+                        backgroundColor: selectedProfileWindow === '7d' ? 'var(--accent-primary)' : 'transparent',
+                        color: selectedProfileWindow === '7d' ? '#fff' : 'var(--text-secondary)',
+                        border: 'none',
+                        cursor: behavioralProfile?.dimensions?.window_7d?.is_sufficient ? 'pointer' : 'not-allowed',
+                        opacity: behavioralProfile?.dimensions?.window_7d?.is_sufficient ? 1 : 0.45
+                      }}
+                      onClick={() => {
+                        if (behavioralProfile?.dimensions?.window_7d?.is_sufficient) {
+                          setSelectedProfileWindow('7d');
+                        }
+                      }}
+                      title={!behavioralProfile?.dimensions?.window_7d?.is_sufficient ? "Requires at least 3 checkouts in the last 7 days" : undefined}
+                    >
+                      Last 7 Days ({behavioralProfile?.dimensions?.window_7d?.sample_count ?? 0})
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Six Behavioral Dimension Cards (A through F) */}
+              {(() => {
+                const dims = behavioralProfile?.dimensions;
+                const activeMetrics = (selectedProfileWindow === '7d' && dims?.window_7d?.is_sufficient)
+                  ? dims.window_7d.metrics
+                  : (selectedProfileWindow === '30d' && dims?.window_30d?.is_sufficient)
+                  ? dims.window_30d.metrics
+                  : dims?.all_time;
+
+                const prep = activeMetrics?.preparation;
+                const dist = activeMetrics?.distraction;
+                const org = activeMetrics?.organization;
+                const timeEst = activeMetrics?.time_estimation;
+                const dep = activeMetrics?.departure;
+                const rout = activeMetrics?.routine_consistency;
+
+                return (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '1.25rem' }}>
+                    {/* Dimension A: Preparation Behavior */}
+                    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      <div className="card-header" style={{ marginBottom: 0 }}>
+                        <h4 className="card-title" style={{ fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                          <Clock size={16} style={{ color: 'var(--accent-primary)' }} />
+                          Dimension A: Preparation Habits
+                        </h4>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          {prep?.observation_count ?? 0} observations
+                        </span>
+                      </div>
+
+                      <div className="metric-grid-4" style={{ gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem' }}>
+                        <div className="metric-card">
+                          <span className="metric-card-val" style={{ color: 'var(--text-primary)' }}>
+                            {prep ? `${prep.avg_actual_prep_min.toFixed(1)}m` : '0m'}
+                          </span>
+                          <span className="metric-card-label">Average Actual Prep</span>
+                          <span className="metric-card-sub">Recorded time getting ready</span>
+                        </div>
+                        <div className="metric-card" style={{
+                          borderColor: (prep?.prep_bias_min ?? 0) >= 3.0 ? 'rgba(244, 63, 94, 0.4)' : 'rgba(16, 185, 129, 0.4)'
+                        }}>
+                          <span className="metric-card-val" style={{
+                            color: (prep?.prep_bias_min ?? 0) >= 3.0 ? 'var(--accent-danger)' : 'var(--accent-success)'
+                          }}>
+                            {(prep?.prep_bias_min ?? 0) > 0 ? `+${prep?.prep_bias_min.toFixed(1)}m` : `${prep?.prep_bias_min.toFixed(1)}m`}
+                          </span>
+                          <span className="metric-card-label">Preparation Time Bias</span>
+                          <span className="metric-card-sub">
+                            {(prep?.prep_bias_min ?? 0) >= 2.0 ? 'Underestimates prep time' : 'Accurately calibrated'}
+                          </span>
+                        </div>
+                        <div className="metric-card">
+                          <span className="metric-card-val">
+                            &plusmn;{prep ? prep.prep_duration_std.toFixed(1) : 0}m
+                          </span>
+                          <span className="metric-card-label">Prep Variability (&sigma;)</span>
+                          <span className="metric-card-sub">Standard deviation of prep</span>
+                        </div>
+                        <div className="metric-card" style={{ borderColor: 'rgba(99, 102, 241, 0.4)' }}>
+                          <span className="metric-card-val" style={{ color: 'var(--accent-primary)' }}>
+                            {Math.round((prep?.prep_consistency_score ?? 1) * 100)}%
+                          </span>
+                          <span className="metric-card-label">Prep Consistency Score</span>
+                          <span className="metric-card-sub">Inverse CV metric</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Dimension B: Distraction Patterns */}
+                    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      <div className="card-header" style={{ marginBottom: 0 }}>
+                        <h4 className="card-title" style={{ fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                          <AlertTriangle size={16} style={{ color: 'var(--accent-warning)' }} />
+                          Dimension B: Distraction Patterns
+                        </h4>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          Interruption analysis
+                        </span>
+                      </div>
+
+                      <div className="metric-grid-4" style={{ gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem' }}>
+                        <div className="metric-card" style={{ borderColor: (dist?.phone_usage_frequency ?? 0) > 0.3 ? 'rgba(244, 63, 94, 0.4)' : undefined }}>
+                          <span className="metric-card-val" style={{ color: (dist?.phone_usage_frequency ?? 0) > 0.3 ? 'var(--accent-danger)' : 'var(--text-primary)' }}>
+                            {Math.round((dist?.phone_usage_frequency ?? 0) * 100)}%
+                          </span>
+                          <span className="metric-card-label">Phone Interruption Rate</span>
+                          <span className="metric-card-sub">Frequency during preparation</span>
+                        </div>
+                        <div className="metric-card">
+                          <span className="metric-card-val" style={{ color: 'var(--accent-warning)' }}>
+                            {dist ? `${dist.avg_phone_interruption_min.toFixed(1)}m` : '0m'}
+                          </span>
+                          <span className="metric-card-label">Interruption Overhead</span>
+                          <span className="metric-card-sub">Avg delay when phone checked</span>
+                        </div>
+                      </div>
+
+                      <div style={{ padding: '0.65rem 0.85rem', backgroundColor: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', fontSize: '0.78rem' }}>
+                        <span style={{ color: 'var(--text-muted)', display: 'block' }}>Most Common Interruption Window</span>
+                        <strong style={{ color: 'var(--text-primary)' }}>
+                          {dist?.common_interruption_period ?? 'None observed'}
+                        </strong>
+                      </div>
+                    </div>
+
+                    {/* Dimension C: Organization Behavior */}
+                    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      <div className="card-header" style={{ marginBottom: 0 }}>
+                        <h4 className="card-title" style={{ fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                          <ShieldCheck size={16} style={{ color: 'var(--accent-success)' }} />
+                          Dimension C: Organization & Readiness
+                        </h4>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          Overnight bag & item readiness
+                        </span>
+                      </div>
+
+                      <div className="metric-grid-4" style={{ gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem' }}>
+                        <div className="metric-card" style={{ borderColor: 'rgba(16, 185, 129, 0.4)' }}>
+                          <span className="metric-card-val" style={{ color: 'var(--accent-success)' }}>
+                            {Math.round((org?.bag_prepared_consistency ?? 0) * 100)}%
+                          </span>
+                          <span className="metric-card-label">Bag Prepared Rate</span>
+                          <span className="metric-card-sub">Packed night before</span>
+                        </div>
+                        <div className="metric-card" style={{ borderColor: (org?.item_search_frequency ?? 0) > 0.25 ? 'rgba(244, 63, 94, 0.4)' : undefined }}>
+                          <span className="metric-card-val" style={{ color: (org?.item_search_frequency ?? 0) > 0.25 ? 'var(--accent-danger)' : 'var(--text-primary)' }}>
+                            {Math.round((org?.item_search_frequency ?? 0) * 100)}%
+                          </span>
+                          <span className="metric-card-label">Item Search Rate</span>
+                          <span className="metric-card-sub">Keys, badges, transit cards</span>
+                        </div>
+                      </div>
+
+                      <div style={{ padding: '0.65rem 0.85rem', backgroundColor: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', fontSize: '0.78rem' }}>
+                        <span style={{ color: 'var(--text-muted)', display: 'block' }}>Recurring Readiness Habit Pattern</span>
+                        <span style={{ color: 'var(--text-secondary)' }}>
+                          {org?.recurring_missing_item_pattern ?? 'Items consistently located prior to departure'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Dimension D: Time Estimation Accuracy */}
+                    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      <div className="card-header" style={{ marginBottom: 0 }}>
+                        <h4 className="card-title" style={{ fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                          <Compass size={16} style={{ color: 'var(--accent-primary)' }} />
+                          Dimension D: Time Estimation Accuracy
+                        </h4>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          Prep vs Travel estimation errors
+                        </span>
+                      </div>
+
+                      <div className="metric-grid-4" style={{ gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem' }}>
+                        <div className="metric-card">
+                          <span className="metric-card-val" style={{ color: 'var(--accent-primary)' }}>
+                            {(timeEst?.prep_estimation_bias_min ?? 0) > 0 ? `+${timeEst?.prep_estimation_bias_min.toFixed(1)}m` : `${timeEst?.prep_estimation_bias_min.toFixed(1)}m`}
+                          </span>
+                          <span className="metric-card-label">Prep Estimation Bias</span>
+                          <span className="metric-card-sub">Actual vs estimated prep</span>
+                        </div>
+                        <div className="metric-card">
+                          <span className="metric-card-val">
+                            {(timeEst?.travel_estimation_bias_min ?? 0) > 0 ? `+${timeEst?.travel_estimation_bias_min.toFixed(1)}m` : `${timeEst?.travel_estimation_bias_min.toFixed(1)}m`}
+                          </span>
+                          <span className="metric-card-label">Travel Estimation Bias</span>
+                          <span className="metric-card-sub">Transit timeline discrepancy</span>
+                        </div>
+                      </div>
+
+                      {/* Event Specific Breakdown */}
+                      {timeEst?.event_specific_errors && Object.keys(timeEst.event_specific_errors).length > 0 && (
+                        <div style={{ marginTop: '0.25rem', padding: '0.65rem 0.85rem', backgroundColor: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', fontSize: '0.76rem' }}>
+                          <span style={{ color: 'var(--text-muted)', display: 'block', marginBottom: '0.35rem' }}>
+                            Estimation Bias by Routine Category:
+                          </span>
+                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            {Object.entries(timeEst.event_specific_errors).slice(0, 4).map(([evName, errVal]) => (
+                              <span key={evName} className="status-badge" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}>
+                                {evName}: <strong>{errVal > 0 ? `+${errVal}m` : `${errVal}m`}</strong>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Dimension E: Departure Behavior */}
+                    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      <div className="card-header" style={{ marginBottom: 0 }}>
+                        <h4 className="card-title" style={{ fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                          <TrendingUp size={16} style={{ color: 'var(--accent-primary)' }} />
+                          Dimension E: Departure Behavior
+                        </h4>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          Punctuality & Day-of-Week Patterns
+                        </span>
+                      </div>
+
+                      <div className="metric-grid-4" style={{ gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem' }}>
+                        <div className="metric-card">
+                          <span className="metric-card-val" style={{ color: (dep?.avg_lateness_min ?? 0) > 3.0 ? 'var(--accent-danger)' : 'var(--accent-success)' }}>
+                            {dep ? `${dep.avg_lateness_min.toFixed(1)}m` : '0m'}
+                          </span>
+                          <span className="metric-card-label">Average Lateness</span>
+                          <span className="metric-card-sub">Actual - planned departure</span>
+                        </div>
+                        <div className="metric-card">
+                          <span className="metric-card-val" style={{ color: (dep?.lateness_frequency ?? 0) > 0.4 ? 'var(--accent-danger)' : 'var(--text-primary)' }}>
+                            {Math.round((dep?.lateness_frequency ?? 0) * 100)}%
+                          </span>
+                          <span className="metric-card-label">Late Rate</span>
+                          <span className="metric-card-sub">Departed after planned time</span>
+                        </div>
+                        <div className="metric-card" style={{ borderColor: 'rgba(16, 185, 129, 0.4)' }}>
+                          <span className="metric-card-val" style={{ color: 'var(--accent-success)' }}>
+                            {Math.round((dep?.early_departure_frequency ?? 0) * 100)}%
+                          </span>
+                          <span className="metric-card-label">Early / On-Time</span>
+                          <span className="metric-card-sub">Departed on schedule</span>
+                        </div>
+                      </div>
+
+                      {/* Day of Week Delay Patterns */}
+                      {dep?.day_specific_patterns && Object.keys(dep.day_specific_patterns).length > 0 && (
+                        <div style={{ padding: '0.65rem 0.85rem', backgroundColor: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', fontSize: '0.76rem' }}>
+                          <span style={{ color: 'var(--text-muted)', display: 'block', marginBottom: '0.35rem' }}>
+                            Day-of-Week Delay Breakdown:
+                          </span>
+                          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                            {Object.entries(dep.day_specific_patterns).map(([dayStr, dMetrics]) => (
+                              <div key={dayStr} style={{ padding: '0.3rem 0.6rem', backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', fontSize: '0.72rem' }}>
+                                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{dayStr.substring(0, 3)}: </span>
+                                <span style={{ color: dMetrics.avg_delay_min > 2.0 ? 'var(--accent-danger)' : 'var(--accent-success)', fontFamily: 'var(--font-mono)' }}>
+                                  {dMetrics.avg_delay_min > 0 ? `+${dMetrics.avg_delay_min.toFixed(1)}m` : `${dMetrics.avg_delay_min.toFixed(1)}m`}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Dimension F: Routine Consistency */}
+                    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      <div className="card-header" style={{ marginBottom: 0 }}>
+                        <h4 className="card-title" style={{ fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                          <Activity size={16} style={{ color: 'var(--accent-secondary)' }} />
+                          Dimension F: Routine Consistency
+                        </h4>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          Adherence & temporal drift
+                        </span>
+                      </div>
+
+                      <div className="metric-grid-4" style={{ gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem' }}>
+                        <div className="metric-card" style={{ borderColor: 'rgba(16, 185, 129, 0.4)' }}>
+                          <span className="metric-card-val" style={{ color: 'var(--accent-success)' }}>
+                            {Math.round((rout?.schedule_adherence_rate ?? 1) * 100)}%
+                          </span>
+                          <span className="metric-card-label">Schedule Adherence</span>
+                          <span className="metric-card-sub">Adhered to target time</span>
+                        </div>
+                        <div className="metric-card">
+                          <span className="metric-card-val">
+                            &plusmn;{rout ? rout.weekday_vs_weekend_variation.toFixed(1) : 0}m
+                          </span>
+                          <span className="metric-card-label">Weekday Variation</span>
+                          <span className="metric-card-sub">Cross-day dispersion</span>
+                        </div>
+                        <div className="metric-card" style={{
+                          borderColor: (rout?.recent_departure_change_min ?? 0) <= -1.0 ? 'rgba(16, 185, 129, 0.4)' : (rout?.recent_departure_change_min ?? 0) >= 1.0 ? 'rgba(244, 63, 94, 0.4)' : undefined
+                        }}>
+                          <span className="metric-card-val" style={{
+                            color: (rout?.recent_departure_change_min ?? 0) <= -1.0 ? 'var(--accent-success)' : (rout?.recent_departure_change_min ?? 0) >= 1.0 ? 'var(--accent-danger)' : 'var(--text-primary)'
+                          }}>
+                            {(rout?.recent_departure_change_min ?? 0) > 0 ? `+${rout?.recent_departure_change_min.toFixed(1)}m` : `${rout?.recent_departure_change_min.toFixed(1)}m`}
+                          </span>
+                          <span className="metric-card-label">Recent Trend Shift</span>
+                          <span className="metric-card-sub">Last 5 vs earlier checkouts</span>
+                        </div>
+                      </div>
+
+                      <div style={{ padding: '0.65rem 0.85rem', backgroundColor: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', fontSize: '0.78rem' }}>
+                        <span style={{ color: 'var(--text-muted)', display: 'block' }}>Routine Stability Assessment</span>
+                        <span style={{ color: 'var(--text-secondary)' }}>
+                          {(rout?.schedule_adherence_rate ?? 1) >= 0.7
+                            ? 'Routine adherence is strong. Morning timeline demonstrates repeatable execution.'
+                            : 'Moderate routine variance detected. Schedule buffer adjustments recommended.'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Evidence-Backed Behavioral Insights Section */}
+              <div className="card">
+                <div className="card-header">
+                  <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <Sparkles size={18} style={{ color: 'var(--accent-primary)' }} />
+                    Evidence-Backed Behavioral Insights
+                  </h3>
+                  <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                    Factual statements strictly derived from underlying checkout data without unsupported causal leaps
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.75rem' }}>
+                  {behavioralProfile?.insights && behavioralProfile.insights.length > 0 ? (
+                    behavioralProfile.insights.map((ins, idx) => (
+                      <div key={idx} style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        gap: '0.75rem',
+                        padding: '0.9rem 1.1rem',
+                        backgroundColor: 'var(--bg-secondary)',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border-color)',
+                        borderLeft: `4px solid ${
+                          ins.dimension === 'preparation' ? 'var(--accent-primary)' :
+                          ins.dimension === 'departure' ? 'var(--accent-danger)' :
+                          ins.dimension === 'distraction' ? 'var(--accent-warning)' :
+                          ins.dimension === 'organization' ? 'var(--accent-success)' : 'var(--accent-secondary)'
+                        }`
+                      }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', maxWidth: '75%' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <span className="status-badge" style={{
+                              backgroundColor: 'var(--bg-primary)',
+                              fontSize: '0.68rem',
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.05em',
+                              color: 'var(--text-muted)'
+                            }}>
+                              {ins.dimension.replace('_', ' ')}
+                            </span>
+                            {ins.finding && (
+                              <strong style={{ fontSize: '0.86rem', color: 'var(--text-primary)' }}>
+                                {ins.finding}
+                              </strong>
+                            )}
+                          </div>
+                          <span style={{ fontSize: '0.88rem', color: 'var(--text-primary)' }}>
+                            {ins.statement}
+                          </span>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span className="status-badge" style={{
+                            backgroundColor: 'rgba(99, 102, 241, 0.12)',
+                            color: 'var(--accent-primary)',
+                            fontSize: '0.72rem',
+                            border: '1px solid rgba(99, 102, 241, 0.25)'
+                          }}>
+                            {ins.factual_evidence}
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                      Record additional departure checkouts to generate evidence-backed behavioral findings.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Historical Profile Comparison & Trend Shift Analysis */}
+              <div className="card">
+                <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <div>
+                    <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <TrendingUp size={18} style={{ color: 'var(--accent-primary)' }} />
+                      Profile Evolution & Rolling Window Comparison
+                    </h3>
+                    <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                      Statistical comparison between historical baseline and recent 7-day observation window
+                    </span>
+                  </div>
+
+                  {profileComparison && (
+                    <span className="status-badge" style={{
+                      backgroundColor: profileComparison.overall_trend === 'improving' ? 'rgba(16, 185, 129, 0.15)' :
+                        profileComparison.overall_trend === 'regressing' ? 'rgba(244, 63, 94, 0.15)' : 'rgba(99, 102, 241, 0.15)',
+                      color: profileComparison.overall_trend === 'improving' ? 'var(--accent-success)' :
+                        profileComparison.overall_trend === 'regressing' ? 'var(--accent-danger)' : 'var(--accent-primary)',
+                      border: `1px solid ${
+                        profileComparison.overall_trend === 'improving' ? 'rgba(16, 185, 129, 0.35)' :
+                        profileComparison.overall_trend === 'regressing' ? 'rgba(244, 63, 94, 0.35)' : 'rgba(99, 102, 241, 0.35)'
+                      }`,
+                      textTransform: 'capitalize',
+                      fontWeight: 600
+                    }}>
+                      Trend: {profileComparison.overall_trend}
+                    </span>
+                  )}
+                </div>
+
+                {profileComparison && (
+                  <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    <div style={{ padding: '0.75rem 1rem', backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', fontSize: '0.84rem', color: 'var(--text-primary)' }}>
+                      <strong>Summary Analysis: </strong>{profileComparison.trend_summary}
+                    </div>
+
+                    {/* Deltas Metric Grid */}
+                    <div className="metric-grid-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+                      <div className="metric-card">
+                        <span className="metric-card-val" style={{
+                          color: profileComparison.deltas.prep_bias_min_delta <= 0 ? 'var(--accent-success)' : 'var(--accent-danger)'
+                        }}>
+                          {profileComparison.deltas.prep_bias_min_delta > 0 ? `+${profileComparison.deltas.prep_bias_min_delta}m` : `${profileComparison.deltas.prep_bias_min_delta}m`}
+                        </span>
+                        <span className="metric-card-label">&Delta; Prep Bias</span>
+                        <span className="metric-card-sub">Shift in prep estimation</span>
+                      </div>
+
+                      <div className="metric-card">
+                        <span className="metric-card-val" style={{
+                          color: profileComparison.deltas.avg_lateness_min_delta <= 0 ? 'var(--accent-success)' : 'var(--accent-danger)'
+                        }}>
+                          {profileComparison.deltas.avg_lateness_min_delta > 0 ? `+${profileComparison.deltas.avg_lateness_min_delta}m` : `${profileComparison.deltas.avg_lateness_min_delta}m`}
+                        </span>
+                        <span className="metric-card-label">&Delta; Average Lateness</span>
+                        <span className="metric-card-sub">Shift in departure delay</span>
+                      </div>
+
+                      <div className="metric-card">
+                        <span className="metric-card-val" style={{
+                          color: profileComparison.deltas.phone_usage_frequency_delta <= 0 ? 'var(--accent-success)' : 'var(--accent-danger)'
+                        }}>
+                          {profileComparison.deltas.phone_usage_frequency_delta > 0 ? `+${Math.round(profileComparison.deltas.phone_usage_frequency_delta * 100)}%` : `${Math.round(profileComparison.deltas.phone_usage_frequency_delta * 100)}%`}
+                        </span>
+                        <span className="metric-card-label">&Delta; Phone Interruption</span>
+                        <span className="metric-card-sub">Shift in phone checking</span>
+                      </div>
+
+                      <div className="metric-card">
+                        <span className="metric-card-val" style={{
+                          color: profileComparison.deltas.bag_prepared_consistency_delta >= 0 ? 'var(--accent-success)' : 'var(--accent-danger)'
+                        }}>
+                          {profileComparison.deltas.bag_prepared_consistency_delta > 0 ? `+${Math.round(profileComparison.deltas.bag_prepared_consistency_delta * 100)}%` : `${Math.round(profileComparison.deltas.bag_prepared_consistency_delta * 100)}%`}
+                        </span>
+                        <span className="metric-card-label">&Delta; Bag Preparation</span>
+                        <span className="metric-card-sub">Shift in overnight readiness</span>
+                      </div>
+
+                      <div className="metric-card">
+                        <span className="metric-card-val" style={{
+                          color: profileComparison.deltas.schedule_adherence_delta >= 0 ? 'var(--accent-success)' : 'var(--accent-danger)'
+                        }}>
+                          {profileComparison.deltas.schedule_adherence_delta > 0 ? `+${Math.round(profileComparison.deltas.schedule_adherence_delta * 100)}%` : `${Math.round(profileComparison.deltas.schedule_adherence_delta * 100)}%`}
+                        </span>
+                        <span className="metric-card-label">&Delta; Schedule Adherence</span>
+                        <span className="metric-card-sub">Shift in punctuality</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Historical Profile Snapshots Table */}
+              <div className="card">
+                <div className="card-header">
+                  <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <History size={18} style={{ color: 'var(--accent-primary)' }} />
+                    Persisted Profile Version Snapshots
+                  </h3>
+                  <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                    Audit trail of versioned behavioral profiles retained for longitudinal tracking
+                  </span>
+                </div>
+
+                <div className="table-wrapper" style={{ marginTop: '0.75rem' }}>
+                  <table className="logs-table" style={{ fontSize: '0.82rem' }}>
+                    <thead>
+                      <tr>
+                        <th>Version</th>
+                        <th>Generated At</th>
+                        <th>Observations</th>
+                        <th>Data Provenance</th>
+                        <th>Prep Bias</th>
+                        <th>Avg Lateness</th>
+                        <th>Schedule Adherence</th>
+                        <th>Sufficiency Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {profileHistory && profileHistory.length > 0 ? (
+                        profileHistory.map((snap) => (
+                          <tr key={snap.profile_id} style={{
+                            backgroundColor: snap.profile_id === behavioralProfile?.profile_id ? 'rgba(99, 102, 241, 0.05)' : undefined
+                          }}>
+                            <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
+                              {snap.profile_version}
+                              {snap.profile_id === behavioralProfile?.profile_id && (
+                                <span className="status-badge" style={{ marginLeft: '0.4rem', backgroundColor: 'rgba(99, 102, 241, 0.15)', color: 'var(--accent-primary)', fontSize: '0.65rem' }}>
+                                  Active
+                                </span>
+                              )}
+                            </td>
+                            <td style={{ fontFamily: 'var(--font-mono)' }}>
+                              {new Date(snap.generated_at).toLocaleString()}
+                            </td>
+                            <td style={{ fontFamily: 'var(--font-mono)' }}>{snap.observation_count}</td>
+                            <td>
+                              <span className="status-badge" style={{
+                                backgroundColor: snap.data_provenance === 'real' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(245, 158, 11, 0.1)',
+                                color: snap.data_provenance === 'real' ? 'var(--accent-success)' : 'var(--accent-warning)',
+                                fontSize: '0.7rem'
+                              }}>
+                                {snap.data_provenance}
+                              </span>
+                            </td>
+                            <td style={{ fontFamily: 'var(--font-mono)' }}>
+                              {snap.summary_metrics.prep_bias_min > 0 ? `+${snap.summary_metrics.prep_bias_min.toFixed(1)}m` : `${snap.summary_metrics.prep_bias_min.toFixed(1)}m`}
+                            </td>
+                            <td style={{ fontFamily: 'var(--font-mono)', color: snap.summary_metrics.avg_lateness_min > 3 ? 'var(--accent-danger)' : 'var(--accent-success)' }}>
+                              {snap.summary_metrics.avg_lateness_min.toFixed(1)}m
+                            </td>
+                            <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-primary)' }}>
+                              {Math.round(snap.summary_metrics.schedule_adherence_rate * 100)}%
+                            </td>
+                            <td>
+                              <span className="status-badge" style={{
+                                backgroundColor: snap.confidence_or_sufficiency_status === 'sufficient' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                                color: snap.confidence_or_sufficiency_status === 'sufficient' ? 'var(--accent-success)' : 'var(--accent-warning)',
+                                fontSize: '0.7rem'
+                              }}>
+                                {snap.confidence_or_sufficiency_status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={8} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)' }}>
+                            No persisted behavioral profile snapshots yet.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
 
           {/* TAB 4: LOG HISTORY */}
           {activeTab === 'history' && (

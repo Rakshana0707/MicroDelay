@@ -575,6 +575,72 @@ def get_clustering_benchmark_endpoint(
     """Fetch comparative benchmarking metrics across K-Means, Agglomerative, and DBSCAN algorithms."""
     return models.get_clustering_benchmark(db)
 
+# Personalized Behavioral Profiling Engine Endpoints (Prompt 2.5)
+@app.get("/api/intelligence/profile")
+def get_user_behavioral_profile_endpoint(
+    provenance: str = "real",
+    force_refresh: bool = False,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Fetch current user's personalized multi-window behavioral profile across 6 dimensions."""
+    return models.get_user_behavioral_profile(
+        db=db,
+        user_id=current_user.id,
+        provenance=provenance,
+        force_refresh=force_refresh
+    )
+
+@app.get("/api/intelligence/profile/history")
+def get_user_profile_history_endpoint(
+    limit: int = 10,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Retrieve history of persisted behavioral profile snapshots for the authenticated user."""
+    return models.get_user_profile_history(
+        db=db,
+        user_id=current_user.id,
+        limit=limit
+    )
+
+@app.get("/api/intelligence/profile/compare")
+def compare_user_profiles_endpoint(
+    profile_id_a: Optional[str] = None,
+    profile_id_b: Optional[str] = None,
+    window_a: Optional[str] = None,
+    window_b: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Compare two profile snapshots or rolling windows for the authenticated user."""
+    res = models.compare_user_profiles(
+        db=db,
+        user_id=current_user.id,
+        profile_id_a=profile_id_a,
+        profile_id_b=profile_id_b,
+        window_a=window_a,
+        window_b=window_b
+    )
+    if isinstance(res, dict) and "error" in res:
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+@app.post("/api/intelligence/profile/refresh")
+def refresh_user_profile_endpoint(
+    provenance: str = "real",
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Force recalculation and snapshot generation of user's behavioral profile."""
+    return models.get_user_behavioral_profile(
+        db=db,
+        user_id=current_user.id,
+        provenance=provenance,
+        force_refresh=True
+    )
+
+
 @app.post("/api/intelligence/predict")
 def predict_adaptive_intelligence_post(
     req: IntelligencePredictRequestSchema,
@@ -699,6 +765,13 @@ def create_checkout_log(
     
     # Retrain this user's custom ML model using auto provenance resolution
     retrain_res = models.train_and_evaluate(db, current_user.id, training_mode="auto")
+
+    # Conditionally recalculate behavioral profile snapshot if >= 3 logs have accumulated
+    try:
+        models.get_user_behavioral_profile(db, current_user.id, provenance="real")
+    except Exception as prof_err:
+        print(f"Profile auto-update notice: {prof_err}")
+
     
     return {
         "success": True,

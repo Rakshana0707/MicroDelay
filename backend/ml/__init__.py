@@ -109,6 +109,18 @@ except ModuleNotFoundError:
         RiskCategory,
         ConfidenceStatus
     )
+try:
+    from ml.profiling import (
+        BehavioralDimensionCalculator,
+        BehavioralInsightsGenerator,
+        PersonalizedBehavioralProfiler
+    )
+except ModuleNotFoundError:
+    from backend.ml.profiling import (
+        BehavioralDimensionCalculator,
+        BehavioralInsightsGenerator,
+        PersonalizedBehavioralProfiler
+    )
 
 __all__ = [
     "ValidationConfig",
@@ -164,5 +176,8 @@ __all__ = [
     "extract_user_behavioral_features",
     "ClusterInterpretationService",
     "BehavioralClusteringTournament",
-    "HabitDiscoveryService"
+    "HabitDiscoveryService",
+    "BehavioralDimensionCalculator",
+    "BehavioralInsightsGenerator",
+    "PersonalizedBehavioralProfiler"
 ]

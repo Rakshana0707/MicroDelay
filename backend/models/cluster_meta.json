@@ -1,6 +1,6 @@
 {
-  "cluster_model_version": "cluster_20261117_033510",
-  "trained_at": "2026-11-17T03:35:10.742680+00:00",
+  "cluster_model_version": "cluster_20261117_144035",
+  "trained_at": "2026-11-17T14:40:35.340672+00:00",
   "algorithm": "K-Means",
   "optimal_k": 2,
   "silhouette_score": 0.108,

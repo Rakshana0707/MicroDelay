@@ -342,5 +342,82 @@ Cluster assignments are never hardcoded by cluster ID numbers. The `ClusterInter
 - `GET /api/intelligence/clusters/benchmark`: Comparative benchmark metrics across K-Means, Agglomerative, and DBSCAN.
 - `frontend/src/App.tsx`: Real-time Discovered Behavioral Habit card on Dashboard, metric comparison grid (User vs Population), trend badge, and Tournament Benchmark matrix on Model Intelligence tab.
 
+---
+
+## 9. Personalized Behavioral Profiling Engine (Prompt 2.5)
+
+### 9.1 Objective & Philosophical Shift
+MicroDelay 2.0 moves beyond static persona assignments by continuously maintaining an evidence-based **Personalized Behavioral Profile** for every user. Instead of relying solely on predefined labels (e.g. "student", "IT professional"), the profiling engine dynamically derives the user's preparation habits, distraction tendencies, organization discipline, and estimation accuracy directly from their genuine checkout history.
+
+### 9.2 Six Foundational Behavioral Dimensions
+The profiler calculates granular statistics across six behavioral dimensions:
+
+1. **Dimension A: Preparation Behavior**
+   - Average actual preparation duration ($\text{avg\_actual\_prep\_min}$).
+   - Preparation time bias ($\text{prep\_bias\_min} = \text{actual\_prep} - \text{estimated\_prep}$).
+   - Preparation duration variability ($\sigma_{\text{prep}}$ standard deviation).
+   - Preparation consistency score ($1 - \min(1, \text{CV}_{\text{prep}})$).
+
+2. **Dimension B: Distraction Patterns**
+   - Phone usage frequency ($\%$ of checkouts with recorded phone distraction).
+   - Average phone interruption overhead ($\text{avg\_phone\_interruption\_min}$).
+   - Most common interruption window (e.g. *"Final 15 min of morning preparation"*).
+   - Historical distraction trend.
+
+3. **Dimension C: Organization & Readiness Behavior**
+   - Doorway item-search frequency ($\%$ with misplaced keys, badges, transit cards).
+   - Item search delay impact ($\text{avg\_item\_search\_delay\_min}$).
+   - Overnight bag preparation consistency ($\%$ packed the night before).
+   - Recurring missing item pattern.
+
+4. **Dimension D: Time Estimation Accuracy**
+   - Preparation estimation bias ($\text{actual\_prep} - \text{estimated\_prep}$).
+   - Travel estimation bias ($\text{actual\_travel} - \text{estimated\_travel}$).
+   - Event-specific prep bias breakdown across distinct routine categories.
+
+5. **Dimension E: Departure Habits**
+   - Average departure delay / lateness ($\text{avg\_lateness\_min}$).
+   - Late departure frequency ($\% > 0\text{m}$).
+   - Early / on-time departure frequency ($\% \le 0\text{m}$).
+   - Day-of-week departure patterns (Monday through Sunday delay and lateness rate breakdown).
+
+6. **Dimension F: Routine Consistency**
+   - Schedule adherence rate ($\%$ departures matching planned departure time).
+   - Weekday vs weekend delay variation ($\text{weekday\_delay\_std}$).
+   - Recent trend shift ($\text{recent}_5 - \text{older}$ average delay difference).
+
+### 9.3 Multi-Window Rolling Calculations & Temporal Safeguards
+To avoid temporal bias and prevent transient disruptions from distorting long-term habits, the profiling engine calculates metrics across three rolling horizons relative to the user's latest recorded checkout:
+- **All-Time Baseline:** Historical baseline across all valid records.
+- **30-Day Window (`30d`):** Medium-term habits and recent trajectory. Requires $N \ge 3$ checkouts.
+- **7-Day Window (`7d`):** Short-term operational focus. Requires $N \ge 3$ checkouts.
+
+If sample size within a window is $< 3$, the system explicitly suppresses trend assertions and flags the window as `is_sufficient: false`.
+
+### 9.4 Data Sufficiency Lifecycle
+To prevent premature or misleading claims, the engine enforces three rigorous sufficiency states:
+- `insufficient_data` ($N < 3$ observations): Profiles are withheld; UI instructs user to record additional checkouts.
+- `gathering_history` ($3 \le N < 8$ observations): Early calibration profile active. Informs user that stable personalization requires 8 checkouts.
+- `sufficient` ($N \ge 8$ observations): Mature, statistically defensible behavioral profile.
+
+### 9.5 Evidence-Backed Insight Generation
+The insights generator is strictly bounded by underlying data. It enforces the following scientific guardrails:
+- **No unsupported causal leaps:** Does not assert that phone usage caused lateness unless phone delay was directly observed.
+- **Strictly factual statements:** E.g., *"You underestimate your preparation time by an average of 4.5 minutes."*, *"Your departure delays are elevated on Mondays (averaging 6.2 minutes late across 4 checkouts)."*
+- **Traceable supporting metrics:** Every generated finding carries the exact numeric metric and factual evidence string.
+
+### 9.6 Versioning, Caching, and Delta Comparisons
+- **Persistence:** Profiles are versioned and stored in `behavioral_profiles` (`BehavioralProfileSnapshot` model) with UUID-timestamped identifiers (`usr_{id}_prof_{YYYYMMDD_HHMMSS_ffffff}`).
+- **Caching & Invalidation:** Active profiles are cached. When $\ge 3$ new valid checkouts accumulate, the engine automatically recalculates and persists a new snapshot. Users can also trigger explicit forced recalculation via `POST /api/intelligence/profile/refresh`.
+- **Period Comparison:** `PersonalizedBehavioralProfiler.compare_profile_periods` computes numeric deltas ($\Delta \text{prep bias}$, $\Delta \text{lateness}$, $\Delta \text{phone distraction}$, $\Delta \text{bag readiness}$, $\Delta \text{adherence}$) and classifies the overall shift as `improving`, `regressing`, or `stable`.
+
+### 9.7 API Endpoints & Frontend UI
+- `GET /api/intelligence/profile`: Returns active profile with 6 dimensions, rolling windows, sufficiency status, and insights.
+- `GET /api/intelligence/profile/history`: Returns audit trail of historical profile snapshots.
+- `GET /api/intelligence/profile/compare`: Compares two snapshots or rolling windows (`window_a` vs `window_b`), with user access isolation.
+- `POST /api/intelligence/profile/refresh`: Forces recalculation of profile snapshot.
+- **Frontend UI (`activeTab === 'profile'`):** Dedicated **Behavioral Profile** tab in React featuring sufficiency badges, window selectors (`All-Time`, `30 Days`, `7 Days`), 6 dimension metric cards, evidence-backed insight list, delta comparison view, and snapshot audit history table.
+
+
 
 
