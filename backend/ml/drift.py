@@ -767,7 +767,7 @@ class ModelPerformanceMonitor:
         ).order_by(ModelVersionRecord.id.desc()).first()
 
         model_version = active_model.model_version if active_model else "global_v1"
-        baseline_mae = float(active_model.mae) if (active_model and active_model.mae) else 4.0
+        baseline_mae = float(active_model.validation_mae) if (active_model and getattr(active_model, "validation_mae", None)) else 4.0
         baseline_bias = 0.0
 
         # Query recent checkouts for user

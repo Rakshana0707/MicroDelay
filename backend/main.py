@@ -9,10 +9,16 @@ import pandas as pd
 from typing import List, Optional
 from pydantic import BaseModel
 
-from database import get_db, init_db, User, Event, DepartureLog, ModelVersionRecord
-import generator
-import models
-import security
+try:
+    from database import get_db, init_db, User, Event, DepartureLog, ModelVersionRecord, CalendarConnection, CalendarEventRecord
+    import generator
+    import models
+    import security
+except ImportError:
+    from backend.database import get_db, init_db, User, Event, DepartureLog, ModelVersionRecord, CalendarConnection, CalendarEventRecord
+    import backend.generator as generator
+    import backend.models as models
+    import backend.security as security
 
 app = FastAPI(title="MicroDelay Multi-User API")
 
@@ -188,6 +194,113 @@ class InterventionFeedbackSchema(BaseModel):
 
 class DriftEventAcknowledgeSchema(BaseModel):
     status: Optional[str] = "acknowledged"
+
+# Phase 3: Context-Aware Intelligence Schemas
+class ContextRequestSchema(BaseModel):
+    event_id: Optional[str] = None
+    event_name: Optional[str] = None
+    current_location: Optional[str] = "Current Location"
+    destination: Optional[str] = None
+    target_time: Optional[str] = None
+    bag_prepared: Optional[bool] = False
+    min_buffer_min: Optional[float] = 5.0
+    max_buffer_min: Optional[float] = 45.0
+
+class OptimizeDepartureSchema(BaseModel):
+    event_id: Optional[str] = None
+    event_name: Optional[str] = None
+    current_location: Optional[str] = "Current Location"
+    destination: Optional[str] = None
+    target_time: Optional[str] = None
+    bag_prepared: Optional[bool] = False
+    min_buffer_min: Optional[float] = 5.0
+    max_buffer_min: Optional[float] = 45.0
+
+class IntegrationToggleSchema(BaseModel):
+    category: str
+    provider_name: Optional[str] = None
+    enabled: bool
+
+class JourneyStartSchema(BaseModel):
+    event_id: Optional[str] = None
+    event_name: Optional[str] = None
+    current_location: Optional[str] = "Current Location"
+    destination: Optional[str] = None
+    target_time: Optional[str] = None
+    bag_prepared: Optional[bool] = False
+
+class JourneyTransitionSchema(BaseModel):
+    target_phase: str
+
+# Google & Microsoft Calendar Integration Schemas (Prompt 3.2 & 3.3)
+class GoogleAuthCallbackSchema(BaseModel):
+    code: str
+    state: str
+    redirect_uri: Optional[str] = None
+
+class OutlookAuthCallbackSchema(BaseModel):
+    code: str
+    state: str
+    redirect_uri: Optional[str] = None
+
+class CalendarEventClassifySchema(BaseModel):
+    travel_requirement: Optional[str] = None
+    associated_routine_id: Optional[int] = None
+    prep_buffer_override_min: Optional[float] = None
+    travel_mode_override: Optional[str] = None
+    location: Optional[str] = None
+
+# Context-Aware Intelligence Architecture (Phase 3) Service Singletons
+try:
+    from integrations.registry import IntegrationRegistry
+    from integrations.calendar.google import GoogleCalendarIntegration
+    from integrations.calendar.outlook import OutlookCalendarIntegration
+    from integrations.calendar.mock import MockCalendarIntegration
+    from integrations.travel.mock import MockTravelIntegration
+    from integrations.traffic.mock import MockTrafficIntegration
+    from integrations.weather.mock import MockWeatherIntegration
+    from services.context_service import ContextService, DepartureContext
+    from services.calendar_service import CalendarService
+    from services.departure_optimizer import DepartureOptimizer
+    from services.notification_service import NotificationService, NotificationMilestone
+    from services.journey_service import JourneyService, JourneyPhase, InvalidJourneyTransitionError
+except ImportError:
+    from backend.integrations.registry import IntegrationRegistry
+    from backend.integrations.calendar.google import GoogleCalendarIntegration
+    from backend.integrations.calendar.outlook import OutlookCalendarIntegration
+    from backend.integrations.calendar.mock import MockCalendarIntegration
+    from backend.integrations.travel.mock import MockTravelIntegration
+    from backend.integrations.traffic.mock import MockTrafficIntegration
+    from backend.integrations.weather.mock import MockWeatherIntegration
+    from backend.services.context_service import ContextService, DepartureContext
+    from backend.services.calendar_service import CalendarService
+    from backend.services.departure_optimizer import DepartureOptimizer
+    from backend.services.notification_service import NotificationService, NotificationMilestone
+    from backend.services.journey_service import JourneyService, JourneyPhase, InvalidJourneyTransitionError
+
+integration_registry = IntegrationRegistry.get_instance()
+google_calendar_integration = GoogleCalendarIntegration(enabled=True)
+outlook_calendar_integration = OutlookCalendarIntegration(enabled=True)
+if not integration_registry.get("calendar"):
+    integration_registry.register("calendar", google_calendar_integration, is_default=True)
+integration_registry.register("calendar", outlook_calendar_integration, is_default=False)
+if not integration_registry.get("travel"):
+    integration_registry.register("travel", MockTravelIntegration(enabled=True), is_default=True)
+if not integration_registry.get("traffic"):
+    integration_registry.register("traffic", MockTrafficIntegration(enabled=True), is_default=True)
+if not integration_registry.get("weather"):
+    integration_registry.register("weather", MockWeatherIntegration(enabled=True), is_default=True)
+
+calendar_service = CalendarService(
+    registry=integration_registry,
+    google_integration=google_calendar_integration,
+    outlook_integration=outlook_calendar_integration
+)
+context_service = ContextService(calendar_service=calendar_service, registry=integration_registry)
+departure_optimizer = DepartureOptimizer()
+notification_service = NotificationService()
+journey_service = JourneyService()
+
 
 # Authentication Endpoints
 @app.post("/api/auth/register", response_model=AuthTokenSchema)
@@ -471,6 +584,16 @@ def predict_lateness_risk_get(
         "risk_category": output.risk_category,
         "predicted_delay_minutes": output.predicted_delay_minutes,
         "baseline_predicted_delay_minutes": output.baseline_predicted_delay_minutes,
+        "prediction_interval_lower": output.prediction_interval_lower,
+        "prediction_interval_upper": output.prediction_interval_upper,
+        "coverage_level": output.coverage_level,
+        "reliability_status": output.reliability_status,
+        "calibration_status": output.calibration_status,
+        "data_sufficiency": output.data_sufficiency,
+        "limitations": output.limitations,
+        "is_abstained": output.is_abstained,
+        "abstention_reason": output.abstention_reason,
+        "reliability_assessment": output.reliability_assessment,
         "model_version": output.model_version,
         "model_type": output.model_type,
         "model_availability": output.model_availability,
@@ -513,6 +636,16 @@ def predict_lateness_risk_post(
         "risk_category": output.risk_category,
         "predicted_delay_minutes": output.predicted_delay_minutes,
         "baseline_predicted_delay_minutes": output.baseline_predicted_delay_minutes,
+        "prediction_interval_lower": output.prediction_interval_lower,
+        "prediction_interval_upper": output.prediction_interval_upper,
+        "coverage_level": output.coverage_level,
+        "reliability_status": output.reliability_status,
+        "calibration_status": output.calibration_status,
+        "data_sufficiency": output.data_sufficiency,
+        "limitations": output.limitations,
+        "is_abstained": output.is_abstained,
+        "abstention_reason": output.abstention_reason,
+        "reliability_assessment": output.reliability_assessment,
         "model_version": output.model_version,
         "model_type": output.model_type,
         "model_availability": output.model_availability,
@@ -922,6 +1055,25 @@ def recalibrate_baseline_endpoint(
     return models.recalibrate_user_baseline(db, current_user.id)
 
 
+# Prediction Confidence & Reliability Engine Endpoints (Prompt 2.9)
+@app.get("/api/intelligence/reliability/status")
+def get_user_reliability_status_endpoint(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Retrieve comprehensive prediction uncertainty, interval coverage, and reliability status."""
+    return models.get_user_prediction_reliability(db, current_user.id)
+
+
+@app.get("/api/intelligence/reliability/calibration")
+def get_user_calibration_metrics_endpoint(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Fetch classification probability calibration evaluation, Brier score, ECE, and reliability diagram."""
+    return models.get_user_classification_calibration(db, current_user.id)
+
+
 @app.post("/api/checkout")
 def create_checkout_log(
     log_in: LogCreateSchema, 
@@ -1272,6 +1424,479 @@ def get_insights(current_user: User = Depends(get_current_user), db: Session = D
         "attribution_summary": attribution_summary,
         "recommendations": recommendations
     }
+
+# ==========================================
+# Phase 3: Context-Aware Intelligence Endpoints
+# ==========================================
+
+@app.get("/api/integrations/status")
+def get_integrations_status(current_user: User = Depends(get_current_user)):
+    """Health check and status across all external integrations."""
+    return {
+        "status": "success",
+        "integrations": integration_registry.get_all_health()
+    }
+
+@app.post("/api/integrations/toggle")
+def toggle_integration(payload: IntegrationToggleSchema, current_user: User = Depends(get_current_user)):
+    """Enable or disable an external integration independently."""
+    if payload.enabled:
+        success = integration_registry.enable_integration(payload.category, payload.provider_name)
+    else:
+        success = integration_registry.disable_integration(payload.category, payload.provider_name)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Integration '{payload.category}' / '{payload.provider_name}' not found.")
+    return {
+        "status": "success",
+        "category": payload.category,
+        "provider_name": payload.provider_name,
+        "enabled": payload.enabled
+    }
+
+@app.post("/api/context/departure")
+def aggregate_departure_context(
+    payload: ContextRequestSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Aggregate unified DepartureContext across behavioral, calendar, travel, traffic, and weather sources."""
+    target_dt = None
+    if payload.target_time:
+        try:
+            target_dt = datetime.datetime.fromisoformat(payload.target_time)
+        except Exception:
+            pass
+
+    constraints = {
+        "bag_prepared": payload.bag_prepared,
+        "min_buffer_min": payload.min_buffer_min,
+        "max_buffer_min": payload.max_buffer_min
+    }
+
+    dep_ctx = context_service.aggregate_context(
+        user_id=current_user.id,
+        event_id=payload.event_id,
+        event_name=payload.event_name,
+        current_location=payload.current_location,
+        destination=payload.destination,
+        target_time=target_dt,
+        user_constraints=constraints,
+        db=db
+    )
+    return dep_ctx.to_dict()
+
+@app.get("/api/context/departure")
+def get_departure_context(
+    event_id: Optional[str] = None,
+    event_name: Optional[str] = None,
+    destination: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """GET endpoint for retrieving departure context."""
+    dep_ctx = context_service.aggregate_context(
+        user_id=current_user.id,
+        event_id=event_id,
+        event_name=event_name,
+        destination=destination,
+        db=db
+    )
+    return dep_ctx.to_dict()
+
+@app.post("/api/departure/optimize")
+def optimize_departure_schedule(
+    payload: OptimizeDepartureSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Compute optimal departure, prep start, and timeline using aggregated departure context."""
+    target_dt = None
+    if payload.target_time:
+        try:
+            target_dt = datetime.datetime.fromisoformat(payload.target_time)
+        except Exception:
+            pass
+
+    constraints = {
+        "bag_prepared": payload.bag_prepared,
+        "min_buffer_min": payload.min_buffer_min,
+        "max_buffer_min": payload.max_buffer_min
+    }
+
+    dep_ctx = context_service.aggregate_context(
+        user_id=current_user.id,
+        event_id=payload.event_id,
+        event_name=payload.event_name,
+        current_location=payload.current_location,
+        destination=payload.destination,
+        target_time=target_dt,
+        user_constraints=constraints,
+        db=db
+    )
+
+    opt_result = departure_optimizer.optimize_departure(dep_ctx)
+    return opt_result.to_dict()
+
+@app.post("/api/notifications/departure")
+def schedule_departure_notifications(
+    payload: OptimizeDepartureSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Schedule smart proactive notification milestones for an upcoming departure."""
+    target_dt = None
+    if payload.target_time:
+        try:
+            target_dt = datetime.datetime.fromisoformat(payload.target_time)
+        except Exception:
+            pass
+
+    dep_ctx = context_service.aggregate_context(
+        user_id=current_user.id,
+        event_id=payload.event_id,
+        event_name=payload.event_name,
+        current_location=payload.current_location,
+        destination=payload.destination,
+        target_time=target_dt,
+        db=db
+    )
+    opt_result = departure_optimizer.optimize_departure(dep_ctx)
+    notifs = notification_service.schedule_departure_notifications(
+        user_id=current_user.id,
+        optimization=opt_result,
+        event_name=dep_ctx.event_name
+    )
+    return {
+        "status": "success",
+        "scheduled_count": len(notifs),
+        "notifications": [n.to_dict() for n in notifs]
+    }
+
+@app.get("/api/notifications/departure")
+def get_due_notifications(current_user: User = Depends(get_current_user)):
+    """Fetch notifications that are currently due for the user."""
+    due = notification_service.get_due_notifications(user_id=current_user.id)
+    return {
+        "status": "success",
+        "due_count": len(due),
+        "notifications": [n.to_dict() for n in due]
+    }
+
+@app.post("/api/journey/start")
+def start_journey(
+    payload: JourneyStartSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Initialize active journey tracking from departure context."""
+    target_dt = None
+    if payload.target_time:
+        try:
+            target_dt = datetime.datetime.fromisoformat(payload.target_time)
+        except Exception:
+            pass
+
+    dep_ctx = context_service.aggregate_context(
+        user_id=current_user.id,
+        event_id=payload.event_id,
+        event_name=payload.event_name,
+        current_location=payload.current_location,
+        destination=payload.destination,
+        target_time=target_dt,
+        db=db
+    )
+    opt = departure_optimizer.optimize_departure(dep_ctx)
+
+    journey = journey_service.create_journey(
+        user_id=current_user.id,
+        context=dep_ctx,
+        recommended_prep_start=opt.recommended_prep_start_time,
+        recommended_departure=opt.recommended_departure_time,
+        target_arrival=opt.target_arrival_time
+    )
+    return journey.to_dict()
+
+@app.post("/api/journey/{journey_id}/transition")
+def transition_journey_phase(
+    journey_id: str,
+    payload: JourneyTransitionSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Advance journey phase through state machine (e.g. prep_started, departed, arrived)."""
+    try:
+        target_phase = JourneyPhase(payload.target_phase)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid phase '{payload.target_phase}'. Must be one of {[p.value for p in JourneyPhase]}")
+
+    try:
+        updated = journey_service.transition_phase(
+            journey_id=journey_id,
+            target_phase=target_phase,
+            db=db
+        )
+        return updated.to_dict()
+    except InvalidJourneyTransitionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.get("/api/journey/{journey_id}")
+def get_journey_status(
+    journey_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Retrieve current state of a journey."""
+    journey = journey_service.get_journey(journey_id)
+    if not journey:
+        raise HTTPException(status_code=404, detail=f"Journey '{journey_id}' not found.")
+    if journey.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this journey.")
+    return journey.to_dict()
+
+
+# ==========================================
+# Google Calendar Integration (Prompt 3.2)
+# ==========================================
+
+@app.get("/api/calendar/google/auth-url")
+def get_google_auth_url(
+    redirect_uri: Optional[str] = "http://localhost:5173/calendar/callback",
+    current_user: User = Depends(get_current_user)
+):
+    """Initiates Google OAuth 2.0 PKCE flow, returns authorization URL and secure state."""
+    auth_url, state = google_calendar_integration.generate_authorization_url(
+        user_id=current_user.id,
+        redirect_uri=redirect_uri or "http://localhost:5173/calendar/callback"
+    )
+    return {
+        "status": "success",
+        "auth_url": auth_url,
+        "state": state
+    }
+
+@app.post("/api/calendar/google/callback")
+def google_auth_callback(
+    payload: GoogleAuthCallbackSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Completes Google OAuth exchange, encrypts tokens, and initiates initial synchronization."""
+    conn = google_calendar_integration.handle_oauth_callback(
+        user_id=current_user.id,
+        code=payload.code,
+        state=payload.state,
+        redirect_uri=payload.redirect_uri,
+        db=db
+    )
+    sync_result = {}
+    try:
+        sync_result = google_calendar_integration.sync_calendar_events(conn, db)
+    except Exception as e:
+        sync_result = {"status": "partial", "error": str(e)}
+
+    return {
+        "status": "success",
+        "connection_id": conn.id,
+        "provider": conn.provider,
+        "account": conn.provider_account_reference,
+        "provider_account_reference": conn.provider_account_reference,
+        "connection_status": conn.connection_status,
+        "sync": sync_result
+    }
+
+# ==========================================
+# Microsoft Outlook Calendar Integration (Prompt 3.3)
+# ==========================================
+
+@app.get("/api/calendar/outlook/auth-url")
+def get_outlook_auth_url(
+    redirect_uri: Optional[str] = "http://localhost:5173/calendar/callback",
+    current_user: User = Depends(get_current_user)
+):
+    """Initiates Microsoft Outlook OAuth 2.0 PKCE flow, returns authorization URL and secure state."""
+    auth_url, state = outlook_calendar_integration.generate_authorization_url(
+        user_id=current_user.id,
+        redirect_uri=redirect_uri or "http://localhost:5173/calendar/callback"
+    )
+    return {
+        "status": "success",
+        "auth_url": auth_url,
+        "state": state
+    }
+
+@app.post("/api/calendar/outlook/callback")
+def outlook_auth_callback(
+    payload: OutlookAuthCallbackSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Completes Microsoft Outlook OAuth exchange, encrypts tokens, and initiates initial synchronization."""
+    try:
+        conn = outlook_calendar_integration.handle_oauth_callback(
+            user_id=current_user.id,
+            code=payload.code,
+            state=payload.state,
+            redirect_uri=payload.redirect_uri,
+            db=db
+        )
+    except IntegrationAuthError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+
+    sync_result = {}
+    try:
+        sync_result = outlook_calendar_integration.sync_calendar_events(conn, db)
+    except Exception as e:
+        sync_result = {"status": "partial", "error": str(e)}
+
+    return {
+        "status": "success",
+        "connection_id": conn.id,
+        "provider": conn.provider,
+        "account": conn.provider_account_reference,
+        "provider_account_reference": conn.provider_account_reference,
+        "connection_status": conn.connection_status,
+        "sync": sync_result
+    }
+
+@app.get("/api/calendar/connections")
+def list_calendar_connections(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List connected calendar accounts for current user."""
+    connections = calendar_service.list_connections(user_id=current_user.id, db=db)
+    return {
+        "status": "success",
+        "connections": connections
+    }
+
+@app.post("/api/calendar/connections/{connection_id}/sync")
+def sync_calendar_connection(
+    connection_id: int,
+    full_resync: Optional[bool] = False,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Trigger manual or incremental synchronization for a calendar connection (Google or Outlook)."""
+    conn = db.query(CalendarConnection).filter(
+        CalendarConnection.id == connection_id,
+        CalendarConnection.user_id == current_user.id
+    ).first()
+    if not conn:
+        raise HTTPException(status_code=404, detail="Calendar connection not found.")
+
+    result = calendar_service.sync_connection(
+        connection=conn,
+        db=db,
+        full_resync=bool(full_resync)
+    )
+    return result
+
+@app.post("/api/calendar/connections/{connection_id}/disconnect")
+def disconnect_calendar_connection(
+    connection_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Disconnect calendar provider (Google or Outlook), revoke tokens, and remove synchronized events."""
+    conn = db.query(CalendarConnection).filter(
+        CalendarConnection.id == connection_id,
+        CalendarConnection.user_id == current_user.id
+    ).first()
+    if not conn:
+        raise HTTPException(status_code=404, detail="Calendar connection not found.")
+
+    calendar_service.disconnect_connection(connection=conn, db=db)
+    return {
+        "status": "success",
+        "message": f"{conn.provider.capitalize()} Calendar connection disconnected and tokens revoked."
+    }
+
+@app.get("/api/calendar/events")
+def list_calendar_events(
+    departure_only: bool = False,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 50,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Query synchronized calendar events for the user."""
+    events = calendar_service.list_events(
+        user_id=current_user.id,
+        departure_only=departure_only,
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit,
+        db=db
+    )
+    return {
+        "status": "success",
+        "count": len(events),
+        "events": events
+    }
+
+@app.patch("/api/calendar/events/{event_id}/classify")
+def classify_calendar_event(
+    event_id: int,
+    payload: CalendarEventClassifySchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update event classification, associate routine, or set travel overrides."""
+    try:
+        updated = calendar_service.update_event_classification(
+            event_id=event_id,
+            user_id=current_user.id,
+            travel_requirement=payload.travel_requirement,
+            associated_routine_id=payload.associated_routine_id,
+            prep_buffer_override_min=payload.prep_buffer_override_min,
+            travel_mode_override=payload.travel_mode_override,
+            location=payload.location,
+            db=db
+        )
+        return {"status": "success", "event": updated}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/calendar/events/{event_id}/plan-departure")
+def plan_departure_from_calendar_event(
+    event_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Directly synthesize DepartureContext and DepartureOptimizer timeline from calendar event."""
+    cal_rec = db.query(CalendarEventRecord).filter(
+        CalendarEventRecord.id == event_id,
+        CalendarEventRecord.user_id == current_user.id
+    ).first()
+    if not cal_rec:
+        raise HTTPException(status_code=404, detail="Calendar event not found.")
+
+    start_dt = datetime.datetime.fromisoformat(cal_rec.start_time)
+    destination = cal_rec.location
+
+    dep_ctx = context_service.aggregate_context(
+        user_id=current_user.id,
+        event_id=str(cal_rec.id),
+        event_name=cal_rec.title,
+        destination=destination,
+        target_time=start_dt,
+        db=db
+    )
+
+    opt_result = departure_optimizer.optimize_departure(dep_ctx)
+    return {
+        "status": "success",
+        "event_id": cal_rec.id,
+        "event_name": cal_rec.title,
+        "context": dep_ctx.to_dict(),
+        "optimization": opt_result.to_dict()
+    }
+
+
+
 
 import os
 from fastapi.staticfiles import StaticFiles

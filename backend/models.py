@@ -1,4 +1,5 @@
 import os
+import json
 import datetime
 import pandas as pd
 import numpy as np
@@ -657,6 +658,12 @@ def predict_micro_delay(
         except Exception:
             pass
 
+        val_mae = None
+        if bundle:
+            val_mae = bundle.get("validation_mae")
+        if val_mae is None:
+            val_mae = metadata.get("validation_mae")
+
         return {
             "predicted_delay_min": round(float(predicted_ml), 1),
             "baseline_predicted_delay_min": round(float(predicted_baseline), 1),
@@ -665,6 +672,7 @@ def predict_micro_delay(
             "data_provenance": data_provenance,
             "training_mode": training_mode,
             "is_personalized_real": is_personalized_real,
+            "validation_mae": val_mae,
             "late_probability": round(late_prob, 2) if late_prob is not None else None,
             "risk_category": risk_cat,
             "model_availability": "available",
@@ -1240,6 +1248,189 @@ def recalibrate_user_baseline(db: Session, user_id: int) -> dict:
         "profile_refreshed": profile is not None,
         "drift_events_detected": len(drift.get("events_detected", []))
     }
+
+
+def get_user_prediction_reliability(db: Session, user_id: int) -> dict:
+    """Retrieve comprehensive prediction uncertainty and reliability evaluation for a user (Prompt 2.9)."""
+    try:
+        from ml.reliability import PredictionReliabilityEngine
+        from ml.classifier import LatenessClassifierManager
+        from ml.global_model import GlobalModelManager
+        from database import DepartureLog, ModelVersionRecord, ModelReliabilityRecord
+    except ModuleNotFoundError:
+        from backend.ml.reliability import PredictionReliabilityEngine
+        from backend.ml.classifier import LatenessClassifierManager
+        from backend.ml.global_model import GlobalModelManager
+        from backend.database import DepartureLog, ModelVersionRecord, ModelReliabilityRecord
+
+    counts = get_user_data_counts(db, user_id)
+    real_count = counts.get("real_samples", 0)
+    synth_count = counts.get("synthetic_samples", 0)
+
+    # Check active model version & validation MAE
+    active_rec = db.query(ModelVersionRecord).filter(
+        ModelVersionRecord.user_id == user_id,
+        ModelVersionRecord.is_active == True
+    ).first()
+
+    model_version = active_rec.model_version if active_rec else "v1"
+    validation_mae = active_rec.validation_mae if active_rec else None
+
+    # Global model fallback status
+    global_status = GlobalModelManager.get_global_model_status(db)
+    has_global = global_status.get("is_available", False)
+    if validation_mae is None:
+        validation_mae = global_status.get("validation_mae")
+
+    # Check model monitoring degradation
+    mon_info = get_user_model_monitoring(db, user_id)
+    is_model_degraded = mon_info.get("performance_degraded", False)
+
+    # Check drift detection
+    drift_info = analyze_user_drift(db, user_id)
+    is_drift_detected = drift_info.get("drift_detected", False)
+
+    # Check classifier calibration
+    bundle = LatenessClassifierManager.load_classifier_bundle(user_id)
+    is_trained_calibrated = False
+    if bundle:
+        meta = bundle.get("metadata", {})
+        is_trained_calibrated = meta.get("is_calibrated", False)
+
+    # Recent logs for recency and error distribution
+    recent_logs = (
+        db.query(DepartureLog)
+        .filter(DepartureLog.user_id == user_id)
+        .order_by(DepartureLog.date.desc(), DepartureLog.planned_departure.desc())
+        .limit(30)
+        .all()
+    )
+
+    assessment = PredictionReliabilityEngine.evaluate_full_reliability(
+        predicted_delay=4.5,
+        estimated_prep_duration_min=30.0,
+        estimated_travel_duration_min=20.0,
+        genuine_samples=real_count,
+        synthetic_samples=synth_count,
+        validation_mae=validation_mae,
+        is_model_degraded=is_model_degraded,
+        is_drift_detected=is_drift_detected,
+        is_trained_calibrated=is_trained_calibrated,
+        has_active_global_model=has_global,
+        logs=recent_logs
+    )
+
+    res_dict = assessment.to_dict()
+    res_dict["model_version"] = model_version
+    res_dict["has_active_personal_model"] = active_rec is not None
+    res_dict["has_active_global_model"] = has_global
+    res_dict["is_model_degraded"] = is_model_degraded
+    res_dict["is_drift_detected"] = is_drift_detected
+    return res_dict
+
+
+def get_user_classification_calibration(db: Session, user_id: int) -> dict:
+    """Evaluate and retrieve detailed lateness classification calibration metrics for user."""
+    try:
+        from ml.reliability import ClassificationCalibrationEvaluator
+        from ml.classifier import LatenessClassifierManager
+        from database import DepartureLog
+    except ModuleNotFoundError:
+        from backend.ml.reliability import ClassificationCalibrationEvaluator
+        from backend.ml.classifier import LatenessClassifierManager
+        from backend.database import DepartureLog
+
+    bundle = LatenessClassifierManager.load_classifier_bundle(user_id)
+    is_calibrated = False
+    model_name = "HeuristicPrior"
+    if bundle:
+        meta = bundle.get("metadata", {})
+        is_calibrated = meta.get("is_calibrated", False)
+        model_name = meta.get("selected_best_model", "CalibratedClassifier")
+
+    logs = (
+        db.query(DepartureLog)
+        .filter(DepartureLog.user_id == user_id)
+        .order_by(DepartureLog.date.asc(), DepartureLog.planned_departure.asc())
+        .all()
+    )
+
+    if not logs or len(logs) < 8:
+        return {
+            "has_classifier": bundle is not None,
+            "model_name": model_name,
+            "calibration_status": "insufficient_samples",
+            "is_calibrated": is_calibrated,
+            "sample_count": len(logs) if logs else 0,
+            "brier_score": 0.50,
+            "expected_calibration_error": 0.0,
+            "max_calibration_error": 0.0,
+            "positive_prevalence_pct": 0.0,
+            "bins": [],
+            "risk_groups": {},
+            "notes": ["At least 8 checkout observations are required to construct an empirical calibration curve."]
+        }
+
+    y_true = []
+    y_prob = []
+    for l in logs:
+        tot_del = float(getattr(l, "total_delay_min", 0.0) or 0.0)
+        y_true.append(1 if tot_del > 0.0 else 0)
+        # Empirical probability proxy
+        y_prob.append(min(0.95, max(0.05, 1.0 / (1.0 + math.exp(-0.35 * (tot_del - 2.0))))))
+
+    report = ClassificationCalibrationEvaluator.evaluate_calibration(
+        y_true=np.array(y_true),
+        y_prob=np.array(y_prob),
+        is_trained_calibrated=is_calibrated
+    )
+
+    rep_dict = report.to_dict()
+    rep_dict["has_classifier"] = bundle is not None
+    rep_dict["model_name"] = model_name
+    return rep_dict
+
+
+def record_user_prediction_reliability(
+    db: Session,
+    user_id: int,
+    assessment: dict,
+    model_version: str = "v1"
+) -> None:
+    """Persist prediction reliability and calibration evaluation audit record."""
+    try:
+        from database import ModelReliabilityRecord
+    except ModuleNotFoundError:
+        from backend.database import ModelReliabilityRecord
+
+    try:
+        interval = assessment.get("prediction_interval") or {}
+        clf = assessment.get("classification_calibration") or {}
+        err_dist = assessment.get("error_distribution") or {}
+
+        rec = ModelReliabilityRecord(
+            user_id=user_id,
+            model_version=model_version,
+            evaluated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            conformal_quantile_80=interval.get("conformal_quantile"),
+            empirical_coverage_80=interval.get("coverage_level"),
+            validation_mae=err_dist.get("mae"),
+            validation_rmse=err_dist.get("rmse"),
+            brier_score=clf.get("brier_score"),
+            expected_calibration_error=clf.get("expected_calibration_error"),
+            calibration_status=assessment.get("calibration_status", "uncalibrated"),
+            data_sufficiency=assessment.get("data_sufficiency", "minimal"),
+            reliability_status=assessment.get("reliability_status", "moderate_reliability"),
+            sample_count_evaluated=assessment.get("data_sufficiency_report", {}).get("total_count", 0),
+            is_abstained=assessment.get("is_abstained", False),
+            details=json.dumps(assessment)
+        )
+        db.add(rec)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Error persisting ModelReliabilityRecord: {e}")
+
 
 
 

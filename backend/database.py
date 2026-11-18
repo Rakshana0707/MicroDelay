@@ -311,6 +311,83 @@ class ModelMonitoringLogRecord(Base):
     user = relationship("User", backref="model_monitoring_logs")
 
 
+class ModelReliabilityRecord(Base):
+    """Tracks empirical prediction intervals, calibration metrics, data sufficiency, and reliability states (Prompt 2.9)."""
+    __tablename__ = "model_reliability_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    model_version = Column(String, nullable=False)
+    evaluated_at = Column(String, nullable=False)
+    conformal_quantile_80 = Column(Float, nullable=True)
+    conformal_quantile_90 = Column(Float, nullable=True)
+    empirical_coverage_80 = Column(Float, nullable=True)
+    validation_mae = Column(Float, nullable=True)
+    validation_rmse = Column(Float, nullable=True)
+    brier_score = Column(Float, nullable=True)
+    expected_calibration_error = Column(Float, nullable=True)
+    calibration_status = Column(String, nullable=False)  # "calibrated", "uncalibrated", "insufficient_samples"
+    data_sufficiency = Column(String, nullable=False)    # "insufficient", "minimal", "moderate", "robust"
+    reliability_status = Column(String, nullable=False)  # "insufficient_history", "low_reliability", "moderate_reliability", "high_reliability", "degraded_model"
+    sample_count_evaluated = Column(Integer, nullable=False)
+    is_abstained = Column(Boolean, nullable=False, default=False)
+    details = Column(Text, nullable=True)  # JSON: limitations, calibration bins, error distribution
+
+    user = relationship("User", backref="reliability_records")
+
+
+class CalendarConnection(Base):
+    """Stores external calendar provider authorization and sync tokens (Prompt 3.2)."""
+    __tablename__ = "calendar_connections"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    provider = Column(String, default="google", nullable=False)
+    provider_account_reference = Column(String, nullable=True)  # e.g. email or account ID
+    encrypted_tokens = Column(Text, nullable=False)  # JSON dict encrypted via Fernet
+    connection_status = Column(String, default="connected", nullable=False)  # connected, expired, revoked, disconnected
+    connected_at = Column(String, nullable=False)
+    last_synced_at = Column(String, nullable=True)
+    sync_token = Column(String, nullable=True)
+    granted_scopes = Column(Text, nullable=True)  # JSON list of scopes
+
+    user = relationship("User", backref="calendar_connections")
+    events = relationship("CalendarEventRecord", back_populates="connection", cascade="all, delete-orphan")
+
+
+class CalendarEventRecord(Base):
+    """Synchronized event records distinct from routine templates (Prompt 3.2)."""
+    __tablename__ = "calendar_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    connection_id = Column(Integer, ForeignKey("calendar_connections.id"), nullable=False, index=True)
+    provider_event_id = Column(String, nullable=False, index=True)
+    title = Column(String, nullable=False)
+    start_time = Column(String, nullable=False, index=True)  # ISO format
+    end_time = Column(String, nullable=False)  # ISO format
+    location = Column(String, nullable=True)
+    calendar_timezone = Column(String, nullable=True)
+    is_all_day = Column(Boolean, default=False, nullable=False)
+    status = Column(String, default="confirmed", nullable=False)  # confirmed, tentative, cancelled
+    recurrence_rule = Column(String, nullable=True)
+    recurring_event_id = Column(String, nullable=True)
+    travel_requirement = Column(String, default="unknown", nullable=False)  # physical, online, personal, excluded, unknown
+    requires_departure_planning = Column(Boolean, default=False, nullable=False)
+    missing_location_warning = Column(Boolean, default=False, nullable=False)
+    online_meeting_url = Column(String, nullable=True)
+    associated_routine_id = Column(Integer, ForeignKey("events.id"), nullable=True)
+    prep_buffer_override_min = Column(Float, nullable=True)
+    travel_mode_override = Column(String, nullable=True)  # driving, transit, walking, bicycling
+    synced_at = Column(String, nullable=False)
+    updated_at = Column(String, nullable=False)
+
+    user = relationship("User", backref="calendar_events")
+    connection = relationship("CalendarConnection", back_populates="events")
+    associated_routine = relationship("Event", backref="calendar_events")
+
+
+
 def migrate_db(db_engine=None):
     """Safely migrate SQLite database schema to include provenance fields and backfill legacy records."""
     target_engine = db_engine or engine
@@ -534,6 +611,85 @@ def migrate_db(db_engine=None):
                 error_distribution_shift BOOLEAN DEFAULT 0,
                 details TEXT
             )
+        """))
+
+        # Create model_reliability_records table if not exists (Prompt 2.9)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS model_reliability_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                model_version VARCHAR NOT NULL,
+                evaluated_at VARCHAR NOT NULL,
+                conformal_quantile_80 FLOAT,
+                conformal_quantile_90 FLOAT,
+                empirical_coverage_80 FLOAT,
+                validation_mae FLOAT,
+                validation_rmse FLOAT,
+                brier_score FLOAT,
+                expected_calibration_error FLOAT,
+                calibration_status VARCHAR NOT NULL,
+                data_sufficiency VARCHAR NOT NULL,
+                reliability_status VARCHAR NOT NULL,
+                sample_count_evaluated INTEGER NOT NULL,
+                is_abstained BOOLEAN DEFAULT 0,
+                details TEXT
+            )
+        """))
+
+        # Create calendar_connections table if not present (Prompt 3.2)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS calendar_connections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                provider VARCHAR NOT NULL DEFAULT 'google',
+                provider_account_reference VARCHAR,
+                encrypted_tokens TEXT NOT NULL,
+                connection_status VARCHAR NOT NULL DEFAULT 'connected',
+                connected_at VARCHAR NOT NULL,
+                last_synced_at VARCHAR,
+                sync_token VARCHAR,
+                granted_scopes TEXT
+            )
+        """))
+
+        # Create calendar_events table if not present (Prompt 3.2)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS calendar_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                connection_id INTEGER NOT NULL REFERENCES calendar_connections(id),
+                provider_event_id VARCHAR NOT NULL,
+                title VARCHAR NOT NULL,
+                start_time VARCHAR NOT NULL,
+                end_time VARCHAR NOT NULL,
+                location VARCHAR,
+                calendar_timezone VARCHAR,
+                is_all_day BOOLEAN DEFAULT 0,
+                status VARCHAR NOT NULL DEFAULT 'confirmed',
+                recurrence_rule VARCHAR,
+                recurring_event_id VARCHAR,
+                travel_requirement VARCHAR NOT NULL DEFAULT 'unknown',
+                requires_departure_planning BOOLEAN DEFAULT 0,
+                missing_location_warning BOOLEAN DEFAULT 0,
+                online_meeting_url VARCHAR,
+                associated_routine_id INTEGER REFERENCES events(id),
+                prep_buffer_override_min FLOAT,
+                travel_mode_override VARCHAR,
+                synced_at VARCHAR NOT NULL,
+                updated_at VARCHAR NOT NULL
+            )
+        """))
+
+        # Unique index preventing duplicate events per connection and provider event ID (Prompt 3.3)
+        conn.execute(text("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_calendar_events_conn_provider_id
+            ON calendar_events (connection_id, provider_event_id)
+        """))
+
+        # Provider index per user
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_calendar_connections_user_provider
+            ON calendar_connections (user_id, provider)
         """))
 
         conn.commit()

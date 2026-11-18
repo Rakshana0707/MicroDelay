@@ -770,4 +770,73 @@ The system strictly decouples input feature evolution from ML model predictive h
   - **Predictive Model Health Tab:** Dedicated card comparing Input Stability with Predictive Accuracy, displaying Rolling MAE, Signed Bias, and Model Status.
   - **Dashboard Spotlight:** Real-time habit trend banner alerting users to sustained improvements or emerging departure friction.
 
+---
+
+## 13. Prediction Confidence & Reliability Engine (Prompt 2.9)
+
+### 13.1 Core Principle: Probability is Not Confidence
+A central tenet of MicroDelay's responsible AI framework is that **model probability and model confidence are fundamentally distinct concepts**:
+- **Lateness Probability:** An estimate of event risk ($P(\text{delay} > 0 \mid x)$). A model might estimate a 90% probability of departing late.
+- **Prediction Confidence:** An assessment of model epistemic uncertainty—whether that 90% estimate is backed by sufficient genuine historical observations, empirical conformal interval coverage, and probability calibration.
+- **Rule Against Invention:** MicroDelay strictly forbids creating arbitrary confidence scores or presenting ungrounded confidence percentages. All reliability metrics are mathematically derived from verified holdouts.
+
+---
+
+### 13.2 Four-Domain Reliability Framework
+Reliability is evaluated independently across four behavioral intelligence domains:
+
+1. **Regression Uncertainty:**
+   - **Split Conformal Prediction:** Computes finite-sample, distribution-free prediction intervals $[\max(0.0, \hat{y} - \hat{q}), \hat{y} + \hat{q}]$ at nominal $80\%$ coverage ($\alpha = 0.20$), where $\hat{q} = \text{Quantile}_{\lceil (n+1)(1-\alpha) \rceil / n}(R)$ on non-conformity residuals $R_i = |y_i - \hat{y}_i|$.
+   - **Historical Error Distribution:** Tracks validation MAE, RMSE, median absolute error, signed prediction bias, and 10th/50th/90th percentile error bounds.
+   - **Temporal Drift Caveat:** Under active behavioral drift, exchangeability is violated; the engine expands intervals by $25\%$ and attaches an explicit exchangeability warning.
+
+2. **Classification Calibration:**
+   - **Brier Score Loss:** Measures mean squared error between probabilities and binary lateness: $\text{BS} = \frac{1}{N} \sum (p_i - y_i)^2$.
+   - **Expected Calibration Error (ECE):** Discretizes probabilities into $B=5$ bins and computes weighted calibration discrepancy:
+     $$\text{ECE} = \sum_{b=1}^B \frac{|B_b|}{N} |\text{acc}(B_b) - \text{conf}(B_b)|$$
+   - **Calibration Status:** Categorized as `"calibrated"` (Platt scaling with $\text{ECE} \le 0.18$), `"uncalibrated"`, or `"insufficient_samples"` ($n < 8$).
+   - **Qualitative Risk Guarantee:** When uncalibrated, probabilities are explicitly flagged as qualitative estimates rather than verified probabilities.
+
+3. **Behavioral Profile Reliability:**
+   - Tracks observation count $n$, attribute completeness percentage, recency days (flagging stale data $> 45$ days), and coefficient of variation ($\text{CV} = \sigma / \mu$) across prep duration and delays.
+
+4. **Recommendation Evidence Tiers:**
+   - Evaluates interventions by historical trials:
+     - `Heuristic Rule`: $0$ prior user trials (triggered by observed behavioral gap).
+     - `Preliminary`: $1-2$ trials.
+     - `Empirically Verified`: $\ge 3$ trials with $\ge 60\%$ observed delay reduction.
+
+---
+
+### 13.3 Documented Rule-Based Reliability States
+Confidence statuses are derived strictly from documented operational rules:
+
+| Reliability State | Criteria & Trigger Conditions |
+|---|---|
+| `degraded_model` | Model monitoring detected predictive degradation (rolling MAE $\ge +30\%$ over baseline) or uncalibrated drift. |
+| `insufficient_history` | Fewer than $8$ genuine checkout observations and no active global model prior. |
+| `low_reliability` | Minimal observations ($8 \le n < 15$), OR stale observations ($> 45$ days), OR validation MAE $> 7.0$ min, OR uncalibrated classifier. |
+| `moderate_reliability` | Adequate observations ($15 \le n < 30$), validation MAE $\le 5.5$ min, recency $\le 45$ days, reasonable interval width. |
+| `high_reliability` | Robust observations ($n \ge 30$), validation MAE $\le 3.5$ min, calibrated classifier ($\text{ECE} \le 0.18$), fresh data ($\le 21$ days), and no active drift. |
+
+---
+
+### 13.4 Prediction Abstention Engine
+MicroDelay responsibly **abstains from making predictions** rather than forcing an ungrounded guess when operating outside validated conditions:
+- **Out-of-Range Contexts:** If estimated preparation or travel duration falls outside physical validation bounds ($[0, 300]$ minutes).
+- **Extreme Cold Start:** If the user has $< 3$ observations and no global model is available.
+- **Catastrophic Model Degradation:** When active models degrade without safe baseline fallbacks.
+- **Abstention Contract:** Returns `is_abstained = True`, `predicted_delay_minutes = None`, `abstention_reason = "Prediction unavailable — insufficient reliable historical observations."`, and guides the user to log checkouts.
+
+---
+
+### 13.5 Database Schema & API Endpoints
+1. **`model_reliability_records` (`ModelReliabilityRecord`):**
+   - Fields: `user_id`, `model_version`, `evaluated_at`, `conformal_quantile_80`, `conformal_quantile_90`, `empirical_coverage_80`, `validation_mae`, `validation_rmse`, `brier_score`, `expected_calibration_error`, `calibration_status`, `data_sufficiency`, `reliability_status`, `sample_count_evaluated`, `is_abstained`, `details`.
+2. **REST Endpoints (`backend/main.py`):**
+   - `GET /api/intelligence/reliability/status`: Unified reliability assessment, prediction intervals, data sufficiency, profile reliability, and limitations.
+   - `GET /api/intelligence/reliability/calibration`: Classification calibration diagram bins, Brier score, and ECE.
+   - `GET/POST /api/intelligence/predict` & `/risk`: Extended with `prediction_interval_lower`, `prediction_interval_upper`, `coverage_level`, `reliability_status`, `calibration_status`, `data_sufficiency`, `limitations`, `is_abstained`, `abstention_reason`.
+
+
 

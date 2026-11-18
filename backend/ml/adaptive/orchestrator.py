@@ -133,6 +133,64 @@ class AdaptiveIntelligenceOrchestrator:
             has_active_global_model = global_status.get("is_available", False)
             global_mae = global_status.get("validation_mae")
 
+        # Check model performance monitoring for degradation if db available (Prompt 2.8 & 2.9)
+        is_model_degraded = False
+        if db is not None:
+            try:
+                try:
+                    from models import get_user_model_monitoring
+                except ModuleNotFoundError:
+                    from backend.models import get_user_model_monitoring
+                mon_info = get_user_model_monitoring(db, context.user_id)
+                if mon_info and mon_info.get("performance_degraded"):
+                    is_model_degraded = True
+            except Exception:
+                pass
+
+        # Check Prediction Abstention (Prompt 2.9)
+        try:
+            from ml.reliability import PredictionReliabilityEngine
+        except ModuleNotFoundError:
+            from backend.ml.reliability import PredictionReliabilityEngine
+
+        should_abstain, abstention_reason, abstained_status = PredictionReliabilityEngine.evaluate_prediction_abstention(
+            estimated_prep_duration_min=float(context.estimated_prep_duration),
+            estimated_travel_duration_min=float(context.estimated_travel_duration),
+            genuine_samples=real_count,
+            has_active_global_model=has_active_global_model,
+            is_model_degraded=is_model_degraded,
+            event_name=context.event_name
+        )
+
+        if should_abstain:
+            logger.info("AdaptiveIntelligenceOrchestrator abstaining from prediction for user_id=%d: %s", context.user_id, abstention_reason)
+            return AdaptiveIntelligenceOutput(
+                predicted_delay_minutes=None,
+                baseline_predicted_delay_minutes=4.5,
+                late_probability=None,
+                risk_category=None,
+                prediction_interval_lower=None,
+                prediction_interval_upper=None,
+                coverage_level=0.80,
+                reliability_status=abstained_status,
+                confidence_status={"score": 0.0, "level": abstained_status, "is_reliable": False, "reasons": [abstention_reason]},
+                calibration_status="insufficient_samples",
+                data_sufficiency="insufficient" if real_count < 8 else "minimal",
+                limitations=[
+                    abstention_reason,
+                    "Complete at least 5 departure checkouts to unlock personalized delay estimates."
+                ],
+                is_abstained=True,
+                abstention_reason=abstention_reason,
+                model_version="abstained",
+                model_type="none",
+                model_availability=ModelAvailability.INSUFFICIENT_DATA.value,
+                data_quality_status=data_quality.to_dict(),
+                personalization_info={},
+                component_status={"reliability": "abstained", "reason": abstention_reason},
+                warnings=[abstention_reason]
+            )
+
         # Behavioral stability: calculate std of recent delays
         delay_std = None
         if recent_logs and len(recent_logs) >= 2:
@@ -328,15 +386,81 @@ class AdaptiveIntelligenceOrchestrator:
             component_status["confidence"] = f"failed: {e}"
 
         # G. Behavioral Drift Detection
+        is_drift_detected = False
         try:
             if recent_logs:
                 drift_info = self.drift_detector.detect_drift(recent_logs)
                 if drift_info.get("drift_detected"):
+                    is_drift_detected = True
                     warnings.append(drift_info.get("description", "Behavioral drift detected."))
             component_status["drift_detection"] = "success"
         except Exception as e:
             logger.warning("Drift detection failed: %s", e)
             component_status["drift_detection"] = f"failed: {e}"
+
+        # H. Full Prediction Reliability & Conformal Uncertainty Evaluation (Prompt 2.9)
+        rel_eval = None
+        is_trained_calibrated = False
+        try:
+            try:
+                from ml.classifier import LatenessClassifierManager
+            except ModuleNotFoundError:
+                from backend.ml.classifier import LatenessClassifierManager
+            clf_b = LatenessClassifierManager.load_classifier_bundle(context.user_id)
+            if clf_b:
+                is_trained_calibrated = bool(clf_b.get("metadata", {}).get("is_calibrated", False))
+        except Exception:
+            pass
+
+        try:
+            try:
+                from ml.reliability import PredictionReliabilityEngine
+            except ModuleNotFoundError:
+                from backend.ml.reliability import PredictionReliabilityEngine
+
+            rel_eval = PredictionReliabilityEngine.evaluate_full_reliability(
+                predicted_delay=predicted_delay,
+                estimated_prep_duration_min=float(context.estimated_prep_duration),
+                estimated_travel_duration_min=float(context.estimated_travel_duration),
+                genuine_samples=real_count,
+                synthetic_samples=synth_count,
+                validation_mae=validation_mae,
+                is_model_degraded=is_model_degraded,
+                is_drift_detected=is_drift_detected,
+                is_trained_calibrated=is_trained_calibrated,
+                has_active_global_model=has_active_global_model,
+                logs=recent_logs,
+                recommendations=recommendations,
+                event_name=context.event_name
+            )
+            component_status["reliability_engine"] = "success"
+        except Exception as rel_err:
+            logger.warning("Reliability evaluation failed: %s", rel_err)
+            component_status["reliability_engine"] = f"failed: {rel_err}"
+
+        pi_lower = rel_eval.prediction_interval.lower_bound if (rel_eval and rel_eval.prediction_interval) else max(0.0, predicted_delay - 4.5)
+        pi_upper = rel_eval.prediction_interval.upper_bound if (rel_eval and rel_eval.prediction_interval) else predicted_delay + 4.5
+        cov_lvl = rel_eval.prediction_interval.coverage_level if (rel_eval and rel_eval.prediction_interval) else 0.80
+        rel_status = rel_eval.reliability_status if rel_eval else confidence_status_obj.level
+        cal_status = rel_eval.calibration_status if rel_eval else ("calibrated" if is_trained_calibrated else "uncalibrated")
+        data_suff = rel_eval.data_sufficiency if rel_eval else data_quality.provenance
+        limits = rel_eval.limitations if rel_eval else []
+
+        # If db is available, persist reliability audit record
+        if db is not None and rel_eval is not None:
+            try:
+                try:
+                    from models import record_user_prediction_reliability
+                except ModuleNotFoundError:
+                    from backend.models import record_user_prediction_reliability
+                record_user_prediction_reliability(
+                    db=db,
+                    user_id=context.user_id,
+                    assessment=rel_eval.to_dict(),
+                    model_version=model_version
+                )
+            except Exception as rec_err:
+                logger.debug("Failed to persist reliability record: %s", rec_err)
 
         # Calculate latency
         latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
@@ -344,17 +468,27 @@ class AdaptiveIntelligenceOrchestrator:
         # Structured operational log (Never logging PII or sensitive data!)
         logger.info(
             "AdaptiveIntelligenceOrchestrator.predict completed: user_id=%d, "
-            "predicted_delay=%.1f min, risk=%s, confidence=%.2f, availability=%s, "
+            "predicted_delay=%.1f min, risk=%s, reliability=%s, cal=%s, availability=%s, "
             "latency_ms=%.1f",
             context.user_id, predicted_delay, risk_category,
-            confidence_status_obj.score, model_availability, latency_ms
+            rel_status, cal_status, model_availability, latency_ms
         )
 
         return AdaptiveIntelligenceOutput(
             predicted_delay_minutes=predicted_delay,
             baseline_predicted_delay_minutes=baseline_delay,
+            prediction_interval_lower=pi_lower,
+            prediction_interval_upper=pi_upper,
+            coverage_level=cov_lvl,
             late_probability=late_probability,
             risk_category=risk_category,
+            reliability_status=rel_status,
+            calibration_status=cal_status,
+            data_sufficiency=data_suff,
+            limitations=limits,
+            is_abstained=False,
+            abstention_reason=None,
+            reliability_assessment=rel_eval.to_dict() if rel_eval else None,
             contributing_factors=contributing_factors,
             recommended_interventions=recommendations,
             confidence_status=confidence_status_obj.to_dict(),

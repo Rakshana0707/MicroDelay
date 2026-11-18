@@ -189,6 +189,41 @@ except ModuleNotFoundError:
         classify_drift_type_and_valence
     )
 
+try:
+    from ml.reliability import (
+        PredictionInterval,
+        ErrorDistribution,
+        CalibrationBin,
+        CalibrationReport,
+        DataSufficiencyReport,
+        ProfileReliabilityReport,
+        RecommendationReliabilityReport,
+        ReliabilityAssessment,
+        ConformalPredictionIntervalEstimator,
+        ClassificationCalibrationEvaluator,
+        BehavioralProfileReliabilityEvaluator,
+        RecommendationReliabilityEvaluator,
+        DataSufficiencyEvaluator,
+        PredictionReliabilityEngine
+    )
+except ModuleNotFoundError:
+    from backend.ml.reliability import (
+        PredictionInterval,
+        ErrorDistribution,
+        CalibrationBin,
+        CalibrationReport,
+        DataSufficiencyReport,
+        ProfileReliabilityReport,
+        RecommendationReliabilityReport,
+        ReliabilityAssessment,
+        ConformalPredictionIntervalEstimator,
+        ClassificationCalibrationEvaluator,
+        BehavioralProfileReliabilityEvaluator,
+        RecommendationReliabilityEvaluator,
+        DataSufficiencyEvaluator,
+        PredictionReliabilityEngine
+    )
+
 __all__ = [
     "ValidationConfig",
     "ValidationReport",
@@ -270,5 +305,19 @@ __all__ = [
     "TemporalDriftAnalyzer",
     "ModelPerformanceMonitor",
     "AdaptiveDriftCoordinator",
-    "classify_drift_type_and_valence"
+    "classify_drift_type_and_valence",
+    "PredictionInterval",
+    "ErrorDistribution",
+    "CalibrationBin",
+    "CalibrationReport",
+    "DataSufficiencyReport",
+    "ProfileReliabilityReport",
+    "RecommendationReliabilityReport",
+    "ReliabilityAssessment",
+    "ConformalPredictionIntervalEstimator",
+    "ClassificationCalibrationEvaluator",
+    "BehavioralProfileReliabilityEvaluator",
+    "RecommendationReliabilityEvaluator",
+    "DataSufficiencyEvaluator",
+    "PredictionReliabilityEngine"
 ]

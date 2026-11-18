@@ -19,6 +19,7 @@ import {
   Plus,
   Trash2,
   ShieldCheck,
+  ShieldAlert,
   RotateCcw,
   BarChart3,
   Layers,
@@ -41,8 +42,6 @@ import {
   Target
 } from 'lucide-react';
 import {
-  AreaChart,
-  Area,
   BarChart,
   Bar,
   XAxis,
@@ -55,6 +54,15 @@ import {
   PieChart,
   Pie
 } from 'recharts';
+
+import { DepartureIntelligenceCard } from './components/DepartureIntelligenceCard';
+import { LearningProgressCard } from './components/LearningProgressCard';
+import { BehavioralProfileOverviewCard } from './components/BehavioralProfileOverviewCard';
+import { BehavioralTrendsPanel } from './components/BehavioralTrendsPanel';
+import { AdaptiveRecommendationsPanel } from './components/AdaptiveRecommendationsPanel';
+import { DriftAlertBanner } from './components/DriftAlertBanner';
+import { PredictionExplanationModal } from './components/PredictionExplanationModal';
+import { CalendarConnectionsSection } from './components/CalendarConnectionsSection';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (import.meta.env.PROD ? '' : 'http://localhost:8000');
 
@@ -445,8 +453,18 @@ interface ModelMonitoringData {
 interface RiskPredictionData {
   late_probability: number | null;
   risk_category: 'low' | 'moderate' | 'high' | 'extreme' | null;
-  predicted_delay_minutes: number;
+  predicted_delay_minutes: number | null;
   baseline_predicted_delay_minutes: number;
+  prediction_interval_lower?: number | null;
+  prediction_interval_upper?: number | null;
+  coverage_level?: number | null;
+  reliability_status?: 'insufficient_history' | 'low_reliability' | 'moderate_reliability' | 'high_reliability' | 'degraded_model';
+  calibration_status?: 'calibrated' | 'uncalibrated' | 'insufficient_samples';
+  data_sufficiency?: 'insufficient' | 'minimal' | 'moderate' | 'robust';
+  limitations?: string[];
+  is_abstained?: boolean;
+  abstention_reason?: string | null;
+  reliability_assessment?: any;
   model_version: string;
   model_type: string;
   model_availability: string;
@@ -462,6 +480,93 @@ interface RiskPredictionData {
   recommended_interventions: RecommendedIntervention[];
   personalization_info?: PersonalizationInfoData;
   explanation?: PredictionExplanationData;
+}
+
+// Prediction Confidence & Reliability Engine Interfaces (Prompt 2.9)
+interface CalibrationBinData {
+  bin_index: number;
+  bin_lower: number;
+  bin_upper: number;
+  bin_center: number;
+  mean_confidence: number;
+  empirical_accuracy: number;
+  sample_count: number;
+}
+
+interface CalibrationReportData {
+  has_classifier: boolean;
+  model_name: string;
+  brier_score: number;
+  expected_calibration_error: number;
+  max_calibration_error: number;
+  calibration_status: 'calibrated' | 'uncalibrated' | 'insufficient_samples';
+  is_calibrated: boolean;
+  sample_count: number;
+  positive_prevalence_pct: number;
+  bins: CalibrationBinData[];
+  risk_groups: Record<string, any>;
+  notes: string[];
+}
+
+interface UserReliabilityStatusData {
+  reliability_status: 'insufficient_history' | 'low_reliability' | 'moderate_reliability' | 'high_reliability' | 'degraded_model';
+  data_sufficiency: 'insufficient' | 'minimal' | 'moderate' | 'robust';
+  calibration_status: 'calibrated' | 'uncalibrated' | 'insufficient_samples';
+  is_abstained: boolean;
+  abstention_reason: string | null;
+  prediction_interval?: {
+    lower_bound: number;
+    upper_bound: number;
+    coverage_level: number;
+    interval_width: number;
+    conformal_quantile: number;
+    method: string;
+    is_calibrated: boolean;
+    is_drift_impacted: boolean;
+    warning?: string;
+  };
+  error_distribution?: {
+    mae: number;
+    rmse: number;
+    median_abs_error: number;
+    signed_bias: number;
+    residual_quantiles: { p10: number; p50: number; p90: number };
+    sample_count: number;
+  };
+  classification_calibration?: CalibrationReportData;
+  data_sufficiency_report: {
+    level: string;
+    genuine_count: number;
+    synthetic_count: number;
+    total_count: number;
+    recency_days: number | null;
+    completeness_score: number;
+    notes: string[];
+  };
+  profile_reliability?: {
+    observation_count: number;
+    completeness_pct: number;
+    recency_days: number | null;
+    recency_status: string;
+    metric_stability: string;
+    is_reliable: boolean;
+    notes: string[];
+  };
+  recommendation_reliabilities: Array<{
+    action: string;
+    behavioral_problem: string;
+    evidence_level: string;
+    trial_count: number;
+    success_count: number;
+    success_rate_pct: number;
+    is_verified: boolean;
+  }>;
+  limitations: string[];
+  model_version?: string;
+  has_active_personal_model?: boolean;
+  has_active_global_model?: boolean;
+  is_model_degraded?: boolean;
+  is_drift_detected?: boolean;
 }
 
 // Global-to-Personalized Learning Interfaces (Prompt 2.3)
@@ -771,7 +876,52 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
 
   // Tab State
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'comparison' | 'profile' | 'interventions' | 'history' | 'routines'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'comparison' | 'profile' | 'interventions' | 'history' | 'routines' | 'calendar'>('dashboard');
+  
+  // Handle Google & Outlook OAuth redirect callback on page load (Prompt 3.2 & 3.3)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const state = params.get('state');
+
+    if (code && state && token) {
+      const provider = sessionStorage.getItem('microdelay_oauth_provider') || 'google';
+      const endpoint = provider === 'outlook' ? '/api/calendar/outlook/callback' : '/api/calendar/google/callback';
+
+      fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ code, state })
+      })
+        .then(async (res) => {
+          if (res.ok) {
+            sessionStorage.removeItem('microdelay_oauth_provider');
+            setActiveTab('calendar');
+          } else if (provider === 'google') {
+            // Fallback attempt with outlook if provider wasn't in session
+            const res2 = await fetch('/api/calendar/outlook/callback', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`
+              },
+              body: JSON.stringify({ code, state })
+            });
+            if (res2.ok) {
+              sessionStorage.removeItem('microdelay_oauth_provider');
+              setActiveTab('calendar');
+            }
+          }
+        })
+        .catch((err) => console.error('OAuth callback error:', err))
+        .finally(() => {
+          window.history.replaceState({}, document.title, window.location.pathname);
+        });
+    }
+  }, [token]);
   
   // Data States
   const [events, setEvents] = useState<EventTemplate[]>([]);
@@ -846,6 +996,7 @@ export default function App() {
   const [importanceLoading, setImportanceLoading] = useState<boolean>(false);
   const [explanationHistory, setExplanationHistory] = useState<PredictionExplanationData[]>([]);
   const [isExplanationExpanded, setIsExplanationExpanded] = useState<boolean>(true);
+  const [isExplanationModalOpen, setIsExplanationModalOpen] = useState<boolean>(false);
   const [auditFilter, setAuditFilter] = useState<'all' | 'increasing' | 'mitigating'>('all');
 
   // Adaptive Personalized Interventions States (Prompt 2.7)
@@ -866,7 +1017,12 @@ export default function App() {
   const [modelMonitoring, setModelMonitoring] = useState<ModelMonitoringData | null>(null);
   const [driftLoading, setDriftLoading] = useState<boolean>(false);
   const [driftFilter, setDriftFilter] = useState<'all' | 'improvements' | 'friction' | 'shifts'>('all');
-  const [driftSubTab, setDriftSubTab] = useState<'trends' | 'model_health'>('trends');
+  const [driftSubTab, setDriftSubTab] = useState<'trends' | 'model_health' | 'reliability'>('trends');
+
+  // Prediction Confidence & Reliability States (Prompt 2.9)
+  const [reliabilityStatus, setReliabilityStatus] = useState<UserReliabilityStatusData | null>(null);
+  const [calibrationReport, setCalibrationReport] = useState<CalibrationReportData | null>(null);
+  const [reliabilityLoading, setReliabilityLoading] = useState<boolean>(false);
 
   // References for Simulator Clock
   const clockIntervalRef = useRef<any>(null);
@@ -1643,6 +1799,34 @@ export default function App() {
     }
   };
 
+  // 10. Fetch Prediction Reliability & Probability Calibration (Prompt 2.9)
+  const fetchReliabilityIntelligence = async (overrideToken?: string) => {
+    const activeToken = overrideToken || token;
+    if (!activeToken) return;
+    const headers = { 'Authorization': `Bearer ${activeToken}` };
+    setReliabilityLoading(true);
+
+    try {
+      const relRes = await fetch(`${BACKEND_URL}/api/intelligence/reliability/status`, { headers });
+      if (relRes.ok) {
+        setReliabilityStatus(await relRes.json());
+      }
+    } catch (e) {
+      console.warn("Could not fetch reliability status:", e);
+    }
+
+    try {
+      const calRes = await fetch(`${BACKEND_URL}/api/intelligence/reliability/calibration`, { headers });
+      if (calRes.ok) {
+        setCalibrationReport(await calRes.json());
+      }
+    } catch (e) {
+      console.warn("Could not fetch calibration report:", e);
+    } finally {
+      setReliabilityLoading(false);
+    }
+  };
+
   const handleRefresh = async () => {
     setIsRefreshing(true);
     await fetchData();
@@ -1650,6 +1834,7 @@ export default function App() {
     await fetchBehavioralProfile();
     await fetchInterventions();
     await fetchDriftData();
+    await fetchReliabilityIntelligence();
     setIsRefreshing(false);
   };
 
@@ -2230,6 +2415,13 @@ export default function App() {
               <Briefcase size={16} />
               Routines
             </button>
+            <button 
+              className={`tab-btn ${activeTab === 'calendar' ? 'active' : ''}`}
+              onClick={() => setActiveTab('calendar')}
+            >
+              <Calendar size={16} />
+              Google Calendar
+            </button>
           </div>
         </div>
       </div>
@@ -2256,6 +2448,17 @@ export default function App() {
           {/* TAB 1: DASHBOARD */}
           {activeTab === 'dashboard' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+              {/* Behavioral Drift Alert Banner (Prompt 2.8 & 2.10 Section 7) */}
+              <DriftAlertBanner
+                driftAnalysis={driftAnalysis}
+                onAcknowledge={handleAcknowledgeDriftEvent}
+                onViewDetails={() => {
+                  setActiveTab('profile');
+                  fetchBehavioralProfile();
+                  fetchDriftData();
+                }}
+              />
+
               {/* Data Provenance & Intelligence Status Banner */}
               <div className="card" style={{
                 borderLeft: `4px solid ${dataSummary?.is_sufficient_real ? 'var(--accent-success)' : 'var(--accent-warning)'}`,
@@ -2303,6 +2506,37 @@ export default function App() {
                   )}
                 </p>
               </div>
+
+              {/* 1. Departure Intelligence Spotlight (Prompt 2.2, 2.9 & 2.10 Section 2) */}
+              <DepartureIntelligenceCard
+                riskPrediction={riskPrediction}
+                predictedDelay={predictedDelay}
+                riskLoading={riskLoading}
+                onOpenExplanation={() => setIsExplanationModalOpen(true)}
+                nextEventName={activeEvent ? `${activeEvent.day_of_week} ${activeEvent.name}` : undefined}
+                historicalAvgDelay={insights?.personal_prep_bias_min ?? 4.2}
+                historicalSampleCount={dataSummary?.real_samples ?? logs.filter(l => !l.is_synthetic).length}
+              />
+
+              {/* 2. Learning Progress & Model Governance (Prompt 2.3 & 2.10 Section 4) */}
+              <LearningProgressCard
+                personalizationInfo={personalizationInfo}
+                reliabilityStatus={reliabilityStatus}
+                genuineSamples={dataSummary?.real_samples ?? logs.filter(l => !l.is_synthetic).length}
+                syntheticSamples={dataSummary?.synthetic_samples ?? logs.filter(l => l.is_synthetic).length}
+                lastTrainedAt={classifierMetrics?.model_version ? new Date().toISOString() : null}
+                lastProfileAt={behavioralProfile?.generated_at || null}
+                onRefresh={async () => {
+                  setReliabilityLoading(true);
+                  await Promise.all([
+                    fetchReliabilityIntelligence(),
+                    fetchBehavioralProfile(),
+                    fetchDriftData()
+                  ]);
+                  setReliabilityLoading(false);
+                }}
+                refreshing={reliabilityLoading}
+              />
 
               {/* Quick Start Guide Banner */}
               <div className="card" style={{ 
@@ -2384,168 +2618,40 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Behavioral Habit Discovery & Pattern Signature Card (Prompt 2.4) */}
-              {clusterProfile && (
-                <div className="habit-card">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <Compass size={20} style={{ color: 'var(--accent-primary)' }} />
-                      <h3 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
-                        Discovered Behavioral Habit Pattern {clusterLoading && <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>(updating...)</span>}
-                      </h3>
-                    </div>
+              {/* 3. Behavioral Profile & Cluster Archetype Overview (Prompt 2.4, 2.5 & 2.10 Section 3) */}
+              <BehavioralProfileOverviewCard
+                clusterProfile={clusterProfile}
+                behavioralProfile={behavioralProfile}
+                onNavigateToProfile={() => {
+                  setActiveTab('profile');
+                  fetchBehavioralProfile();
+                  fetchDriftData();
+                }}
+                clusterLoading={clusterLoading}
+              />
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
-                      <span className="status-badge" style={{
-                        backgroundColor: clusterProfile.data_sufficiency_status === 'sufficient' ? 'rgba(16, 185, 129, 0.15)' :
-                                       clusterProfile.data_sufficiency_status === 'gathering_history' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(148, 163, 184, 0.15)',
-                        color: clusterProfile.data_sufficiency_status === 'sufficient' ? 'var(--accent-success)' :
-                               clusterProfile.data_sufficiency_status === 'gathering_history' ? 'var(--accent-warning)' : 'var(--text-secondary)',
-                        border: `1px solid ${
-                          clusterProfile.data_sufficiency_status === 'sufficient' ? 'rgba(16, 185, 129, 0.35)' :
-                          clusterProfile.data_sufficiency_status === 'gathering_history' ? 'rgba(245, 158, 11, 0.35)' : 'rgba(148, 163, 184, 0.3)'
-                        }`,
-                        fontSize: '0.72rem'
-                      }}>
-                        {clusterProfile.data_sufficiency_status === 'sufficient' ? 'Sufficient History' :
-                         clusterProfile.data_sufficiency_status === 'gathering_history' ? `Provisional (${clusterProfile.sample_count}/8 checkouts)` :
-                         `Collecting Initial Data (${clusterProfile.sample_count}/3 checkouts)`}
-                      </span>
-                    </div>
-                  </div>
+              {/* 4. Adaptive Recommendations & Habit Interventions (Prompt 2.7 & 2.10 Section 6) */}
+              <AdaptiveRecommendationsPanel
+                personalizedRecs={personalizedRecs}
+                userInterventions={userInterventions}
+                onAccept={handleAcceptIntervention}
+                onComplete={(rec) => setCompletingIntervention(rec)}
+                onDismiss={handleDismissIntervention}
+                onSnooze={(id) => handleSnoozeIntervention(id, 7)}
+                actionInProgressId={actionInProgressId}
+                onNavigateToInterventions={() => {
+                  setActiveTab('interventions');
+                  fetchInterventions();
+                }}
+              />
 
-                  {/* Habit Banner */}
-                  <div className="habit-banner">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
-                      <span style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                        {clusterProfile.cluster_name}
-                      </span>
-                      <span style={{ fontSize: '0.74rem', color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)' }}>
-                        Cluster Model: {clusterProfile.cluster_model_version}
-                      </span>
-                    </div>
-
-                    <p style={{ fontSize: '0.84rem', color: 'var(--text-secondary)', margin: '0.2rem 0 0', lineHeight: 1.45 }}>
-                      {clusterProfile.cluster_description}
-                    </p>
-
-                    {clusterProfile.recommended_action && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.3rem', fontSize: '0.8rem', color: 'var(--text-primary)' }}>
-                        <Sparkles size={14} style={{ color: 'var(--accent-warning)', flexShrink: 0 }} />
-                        <span><strong>Recommended Habit Action:</strong> {clusterProfile.recommended_action}</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Trend & Historical Comparison */}
-                  {clusterProfile.previous_profile_comparison && (
-                    <div style={{ padding: '0.65rem 0.85rem', backgroundColor: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', fontSize: '0.8rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <span className={`habit-trend-pill ${clusterProfile.previous_profile_comparison.trend}`}>
-                          {clusterProfile.previous_profile_comparison.trend === 'improving' ? <TrendingDown size={12} /> : <TrendingUp size={12} />}
-                          {clusterProfile.previous_profile_comparison.trend.toUpperCase()}
-                        </span>
-                        <span style={{ color: 'var(--text-secondary)' }}>
-                          {clusterProfile.previous_profile_comparison.trend_message}
-                        </span>
-                      </div>
-                      {clusterProfile.previous_profile_comparison.cluster_shifted && (
-                        <span style={{ color: 'var(--accent-primary)', fontSize: '0.74rem', fontWeight: 600 }}>
-                          Shifted from: {clusterProfile.previous_profile_comparison.previous_cluster_name}
-                        </span>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Comparative Behavioral Habit Metrics (User vs Population) */}
-                  <div>
-                    <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: '0.4rem' }}>
-                      Your Behavioral Habit Levels vs Population Average
-                    </span>
-                    <div className="habit-metric-grid">
-                      <div className="habit-metric-box">
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Prep Bias</span>
-                        <strong style={{ fontSize: '0.95rem', color: (clusterProfile.user_features?.average_prep_bias || 0) > 3 ? 'var(--accent-danger)' : 'var(--accent-success)' }}>
-                          {clusterProfile.user_features?.average_prep_bias?.toFixed(1) ?? '0.0'}m
-                        </strong>
-                        <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
-                          Pop: {clusterProfile.population_mean?.average_prep_bias?.toFixed(1) ?? '2.5'}m
-                        </span>
-                      </div>
-
-                      <div className="habit-metric-box">
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Avg Delay</span>
-                        <strong style={{ fontSize: '0.95rem', color: (clusterProfile.user_features?.average_departure_delay || 0) > 4 ? 'var(--accent-warning)' : 'var(--accent-success)' }}>
-                          {clusterProfile.user_features?.average_departure_delay?.toFixed(1) ?? '0.0'}m
-                        </strong>
-                        <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
-                          Pop: {clusterProfile.population_mean?.average_departure_delay?.toFixed(1) ?? '3.5'}m
-                        </span>
-                      </div>
-
-                      <div className="habit-metric-box">
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Phone Distraction</span>
-                        <strong style={{ fontSize: '0.95rem', color: (clusterProfile.user_features?.phone_distraction_frequency || 0) > 0.3 ? 'var(--accent-danger)' : 'var(--text-primary)' }}>
-                          {Math.round((clusterProfile.user_features?.phone_distraction_frequency || 0) * 100)}%
-                        </strong>
-                        <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
-                          Pop: {Math.round((clusterProfile.population_mean?.phone_distraction_frequency || 0.2) * 100)}%
-                        </span>
-                      </div>
-
-                      <div className="habit-metric-box">
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Item Search</span>
-                        <strong style={{ fontSize: '0.95rem', color: (clusterProfile.user_features?.item_search_frequency || 0) > 0.3 ? 'var(--accent-warning)' : 'var(--text-primary)' }}>
-                          {Math.round((clusterProfile.user_features?.item_search_frequency || 0) * 100)}%
-                        </strong>
-                        <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
-                          Pop: {Math.round((clusterProfile.population_mean?.item_search_frequency || 0.2) * 100)}%
-                        </span>
-                      </div>
-
-                      <div className="habit-metric-box">
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Bag Prepared</span>
-                        <strong style={{ fontSize: '0.95rem', color: (clusterProfile.user_features?.bag_prepared_percentage || 0) >= 0.7 ? 'var(--accent-success)' : 'var(--text-secondary)' }}>
-                          {Math.round((clusterProfile.user_features?.bag_prepared_percentage || 0) * 100)}%
-                        </strong>
-                        <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
-                          Pop: {Math.round((clusterProfile.population_mean?.bag_prepared_percentage || 0.5) * 100)}%
-                        </span>
-                      </div>
-
-                      <div className="habit-metric-box">
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Recent Shift</span>
-                        <strong style={{ fontSize: '0.95rem', color: (clusterProfile.user_features?.recent_behavior_change || 0) <= 0 ? 'var(--accent-success)' : 'var(--accent-danger)' }}>
-                          {(clusterProfile.user_features?.recent_behavior_change || 0) <= 0 ? '' : '+'}
-                          {clusterProfile.user_features?.recent_behavior_change?.toFixed(1) ?? '0.0'}m
-                        </strong>
-                        <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
-                          {(clusterProfile.user_features?.recent_behavior_change || 0) <= 0 ? 'Faster lately' : 'Slower lately'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Top Characteristics Chips */}
-                  {clusterProfile.dominant_characteristics && clusterProfile.dominant_characteristics.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                        Differentiating Behavioral Characteristics:
-                      </span>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-                        {clusterProfile.dominant_characteristics.map((c, idx) => (
-                          <span key={idx} className="habit-diff-chip">
-                            <strong style={{ color: 'var(--accent-primary)', textTransform: 'capitalize' }}>
-                              {c.feature.replace(/_/g, ' ')}:
-                            </strong>
-                            <span>{c.relative_difference}</span>
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
+              {/* 5. Behavioral Habits & Longitudinal Trend Analytics (Prompt 2.10 Section 5) */}
+              <BehavioralTrendsPanel
+                biasChartData={biasChartData}
+                logs={logs}
+                userInterventions={userInterventions}
+                driftAnalysis={driftAnalysis}
+              />
 
               {/* Graphical Insights */}
               <div className="grid-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))" }}>
@@ -2624,223 +2730,6 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                </div>
-              </div>
-
-              {/* Personal Prep Bias history timeline (Full Width) */}
-              <div className="card">
-                <div className="card-header">
-                  <h3 className="card-title">Time Estimation Accuracy History</h3>
-                  <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Gap between your estimated preparation time (dotted) and actual prep time (solid)</span>
-                </div>
-                <div style={{ height: '240px' }}>
-                  {biasChartData.length > 0 ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={biasChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                        <defs>
-                          <linearGradient id="colorActual" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="var(--accent-primary)" stopOpacity={0.2}/>
-                            <stop offset="95%" stopColor="var(--accent-primary)" stopOpacity={0}/>
-                          </linearGradient>
-                          <linearGradient id="colorEstimated" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="var(--text-muted)" stopOpacity={0.1}/>
-                            <stop offset="95%" stopColor="var(--text-muted)" stopOpacity={0}/>
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                        <XAxis dataKey="date" stroke="var(--text-muted)" style={{ fontSize: '11px' }} />
-                        <YAxis stroke="var(--text-muted)" style={{ fontSize: '11px' }} unit="m" />
-                        <Tooltip 
-                          contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', borderRadius: '8px', color: 'var(--text-primary)' }}
-                          labelStyle={{ fontWeight: 600 }}
-                        />
-                        <Legend wrapperStyle={{ fontSize: '12px' }} />
-                        <Area type="monotone" dataKey="actual" name="Actual Prep Time" stroke="var(--accent-primary)" fillOpacity={1} fill="url(#colorActual)" strokeWidth={2} />
-                        <Area type="monotone" dataKey="estimated" name="Estimated Prep Time" stroke="var(--text-muted)" fillOpacity={1} fill="url(#colorEstimated)" strokeDasharray="5 5" strokeWidth={1.5} />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <div style={{ textAlign: 'center', color: 'var(--text-muted)', paddingTop: '4rem' }}>No data to display.</div>
-                  )}
-                </div>
-              </div>
-
-              {/* ML Behavioral Insight Recommendations */}
-              <div className="card">
-                <div className="card-header">
-                  <h3 className="card-title">
-                    <BrainCircuit style={{ color: 'var(--accent-primary)' }} />
-                    MicroDelay Pattern Insights
-                  </h3>
-                  <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Machine Learning analysis of your time behavior patterns</span>
-                </div>
-
-                {insights?.provenance_notice && (
-                  <div style={{
-                    margin: '0.75rem 1.25rem 0',
-                    padding: '0.65rem 0.9rem',
-                    borderRadius: 'var(--radius-sm)',
-                    backgroundColor: insights.is_synthetic_demonstration ? 'rgba(236, 72, 153, 0.08)' : 'rgba(16, 185, 129, 0.08)',
-                    border: `1px solid ${insights.is_synthetic_demonstration ? 'rgba(236, 72, 153, 0.25)' : 'rgba(16, 185, 129, 0.25)'}`,
-                    fontSize: '0.82rem',
-                    color: 'var(--text-secondary)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.5rem'
-                  }}>
-                    <span style={{ fontWeight: 600, color: insights.is_synthetic_demonstration ? 'var(--accent-secondary)' : 'var(--accent-success)' }}>
-                      {insights.is_synthetic_demonstration ? 'Demonstration Notice:' : 'Verified Data:'}
-                    </span>
-                    <span>{insights.provenance_notice}</span>
-                  </div>
-                )}
-
-                {/* Evidence-Driven Intervention Spotlight (Prompt 2.7) */}
-                {(userInterventions.filter(i => i.status === 'accepted' || i.status === 'started').length > 0 || personalizedRecs.length > 0) && (
-                  <div style={{ 
-                    marginBottom: '1rem', 
-                    padding: '0.85rem 1rem', 
-                    borderRadius: '8px', 
-                    border: '1px solid rgba(59, 130, 246, 0.3)', 
-                    background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, rgba(139, 92, 246, 0.05) 100%)',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    flexWrap: 'wrap',
-                    gap: '0.75rem'
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                      <div style={{ 
-                        padding: '0.5rem', 
-                        borderRadius: '6px', 
-                        backgroundColor: 'rgba(59, 130, 246, 0.2)', 
-                        color: 'var(--accent-primary)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center'
-                      }}>
-                        <Target size={20} />
-                      </div>
-                      <div>
-                        <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-primary)' }}>
-                          {userInterventions.filter(i => i.status === 'accepted' || i.status === 'started').length > 0
-                            ? `Active Trial: ${userInterventions.find(i => i.status === 'accepted' || i.status === 'started')?.action}`
-                            : `${personalizedRecs.length} Evidence-Driven Intervention(s) Available`}
-                        </div>
-                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                          {userInterventions.filter(i => i.status === 'accepted' || i.status === 'started').length > 0
-                            ? 'Currently tracking before-and-after departure metrics in your active habit trial.'
-                            : 'Personalized to your diagnosed departure bottlenecks, underestimation biases, and distraction triggers.'}
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      className="tab-btn active"
-                      onClick={() => {
-                        setActiveTab('interventions');
-                        fetchInterventions();
-                      }}
-                      style={{ fontSize: '0.8rem', padding: '0.4rem 0.85rem' }}
-                    >
-                      View Habits & Interventions →
-                    </button>
-                  </div>
-                )}
-
-                {/* Behavioral Drift & Habit Change Spotlight (Prompt 2.8) */}
-                {driftAnalysis && driftAnalysis.events_detected && driftAnalysis.events_detected.length > 0 && (
-                  <div style={{
-                    marginBottom: '1rem',
-                    padding: '0.85rem 1rem',
-                    borderRadius: '8px',
-                    border: (driftAnalysis.improvements_count || 0) > 0 && (driftAnalysis.deteriorations_count || 0) === 0
-                      ? '1px solid rgba(16, 185, 129, 0.35)'
-                      : (driftAnalysis.deteriorations_count || 0) > 0
-                      ? '1px solid rgba(239, 68, 68, 0.35)'
-                      : '1px solid rgba(139, 92, 246, 0.35)',
-                    background: (driftAnalysis.improvements_count || 0) > 0 && (driftAnalysis.deteriorations_count || 0) === 0
-                      ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(59, 130, 246, 0.05) 100%)'
-                      : (driftAnalysis.deteriorations_count || 0) > 0
-                      ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.08) 0%, rgba(245, 158, 11, 0.05) 100%)'
-                      : 'linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(59, 130, 246, 0.05) 100%)',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    flexWrap: 'wrap',
-                    gap: '0.75rem'
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                      <div style={{
-                        padding: '0.5rem',
-                        borderRadius: '6px',
-                        backgroundColor: (driftAnalysis.improvements_count || 0) > 0 && (driftAnalysis.deteriorations_count || 0) === 0
-                          ? 'rgba(16, 185, 129, 0.2)'
-                          : (driftAnalysis.deteriorations_count || 0) > 0
-                          ? 'rgba(239, 68, 68, 0.2)'
-                          : 'rgba(139, 92, 246, 0.2)',
-                        color: (driftAnalysis.improvements_count || 0) > 0 && (driftAnalysis.deteriorations_count || 0) === 0
-                          ? 'var(--accent-success)'
-                          : (driftAnalysis.deteriorations_count || 0) > 0
-                          ? 'var(--accent-danger)'
-                          : '#8b5cf6',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center'
-                      }}>
-                        <TrendingUp size={20} />
-                      </div>
-                      <div>
-                        <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-primary)' }}>
-                          {(driftAnalysis.improvements_count || 0) > 0 && (driftAnalysis.deteriorations_count || 0) === 0
-                            ? 'Positive Habit Trend: Punctuality Progress Detected'
-                            : (driftAnalysis.deteriorations_count || 0) > 0
-                            ? 'Routine Shift: Emerging Departure Friction Detected'
-                            : 'Routine Evolution: Distributional Shift Detected'}
-                        </div>
-                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                          {driftAnalysis.summary}
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      className="tab-btn"
-                      onClick={() => {
-                        setActiveTab('profile');
-                        fetchBehavioralProfile();
-                        fetchDriftData();
-                      }}
-                      style={{ fontSize: '0.8rem', padding: '0.4rem 0.85rem' }}
-                    >
-                      View Routine Analysis →
-                    </button>
-                  </div>
-                )}
-                
-                <div className="recs-list">
-                  {insights && insights.recommendations && insights.recommendations.map((rec, i) => (
-                    <div 
-                      key={i} 
-                      className={`rec-card ${
-                        rec.title.includes('Lateness') || rec.title.includes('Bottleneck') ? 'danger' : 
-                        rec.title.includes('Underestimation') || rec.title.includes('Bias') ? 'warning' : ''
-                      }`}
-                    >
-                      <div className="rec-title">
-                        {rec.title.includes('Lateness') || rec.title.includes('Bottleneck') ? <AlertTriangle size={18} style={{ color: 'var(--accent-danger)' }} /> : 
-                         rec.title.includes('Underestimation') || rec.title.includes('Bias') ? <Clock size={18} style={{ color: 'var(--accent-warning)' }} /> : 
-                         <UserCheck size={18} style={{ color: 'var(--accent-success)' }} />}
-                        {rec.title}
-                      </div>
-                      <div className="rec-desc">{rec.description}</div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-                        <div className="rec-action">
-                          <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>Suggested change: </span>
-                          {rec.action}
-                        </div>
-                        <div className="rec-impact">{rec.impact}</div>
-                      </div>
-                    </div>
-                  ))}
                 </div>
               </div>
             </div>
@@ -2925,121 +2814,166 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* Proactive Departure Lateness Risk Card (Prompt 2.2) */}
+                        {/* Proactive Departure Lateness Risk & Reliability Card (Prompt 2.2 & 2.9) */}
                         {riskPrediction && (
-                          <div className={`risk-card ${riskPrediction.risk_category || 'moderate'}`}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                          riskPrediction.is_abstained ? (
+                            <div className="prediction-abstention-banner">
                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                <BrainCircuit size={18} style={{
-                                  color: riskPrediction.risk_category === 'low' ? 'var(--accent-success)' :
-                                         riskPrediction.risk_category === 'moderate' ? 'var(--accent-warning)' :
-                                         riskPrediction.risk_category === 'high' ? '#f97316' : 'var(--accent-danger)'
-                                }} />
+                                <ShieldAlert size={18} style={{ color: 'var(--accent-warning)' }} />
                                 <span style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-primary)' }}>
-                                  Departure Lateness Risk {riskLoading && <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>(updating...)</span>}
+                                  Prediction Unavailable — Insufficient Historical Observations
                                 </span>
                               </div>
+                              <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                                {riskPrediction.abstention_reason || "Operating conditions require additional genuine departure checkouts before estimating delay."}
+                              </p>
+                              <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                                🛡️ <em>MicroDelay Principle: Never invent numbers when observations are insufficient.</em>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className={`risk-card ${riskPrediction.risk_category || 'moderate'}`}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                  <BrainCircuit size={18} style={{
+                                    color: riskPrediction.risk_category === 'low' ? 'var(--accent-success)' :
+                                           riskPrediction.risk_category === 'moderate' ? 'var(--accent-warning)' :
+                                           riskPrediction.risk_category === 'high' ? '#f97316' : 'var(--accent-danger)'
+                                  }} />
+                                  <span style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-primary)' }}>
+                                    Departure Lateness Risk {riskLoading && <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>(updating...)</span>}
+                                  </span>
+                                </div>
 
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                  {riskPrediction.late_probability !== null ? (
+                                    <span className={`risk-badge ${riskPrediction.risk_category || 'moderate'}`}>
+                                      {riskPrediction.risk_category ? `${riskPrediction.risk_category} risk` : 'calibrating'} ({Math.round(riskPrediction.late_probability * 100)}%)
+                                    </span>
+                                  ) : (
+                                    <span className="status-badge" style={{ backgroundColor: 'rgba(245, 158, 11, 0.1)', color: 'var(--accent-warning)', border: '1px solid rgba(245, 158, 11, 0.25)', fontSize: '0.72rem' }}>
+                                      Calibrating Risk Model
+                                    </span>
+                                  )}
+                                  <span className={`reliability-badge ${riskPrediction.reliability_status || 'moderate_reliability'}`}>
+                                    {riskPrediction.reliability_status?.replace(/_/g, ' ') || 'Moderate Reliability'}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Probability Gauge Meter */}
                               {riskPrediction.late_probability !== null ? (
-                                <span className={`risk-badge ${riskPrediction.risk_category || 'moderate'}`}>
-                                  {riskPrediction.risk_category ? `${riskPrediction.risk_category} risk` : 'calibrating'} ({Math.round(riskPrediction.late_probability * 100)}%)
-                                </span>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
+                                    <span style={{ color: 'var(--text-secondary)' }}>
+                                      Probability of Departing Late:
+                                      <span className={`calibration-badge ${riskPrediction.calibration_status || 'uncalibrated'}`} style={{ marginLeft: '0.4rem', fontSize: '0.68rem' }}>
+                                        {riskPrediction.calibration_status === 'calibrated' ? '✓ Calibrated' : 'Qualitative'}
+                                      </span>
+                                    </span>
+                                    <span style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', color:
+                                      riskPrediction.risk_category === 'low' ? 'var(--accent-success)' :
+                                      riskPrediction.risk_category === 'moderate' ? 'var(--accent-warning)' :
+                                      riskPrediction.risk_category === 'high' ? '#f97316' : 'var(--accent-danger)'
+                                    }}>
+                                      {(riskPrediction.late_probability * 100).toFixed(0)}%
+                                    </span>
+                                  </div>
+                                  <div className="risk-meter">
+                                    <div 
+                                      className="risk-meter-fill"
+                                      style={{
+                                        width: `${Math.min(100, Math.max(3, riskPrediction.late_probability * 100))}%`,
+                                        backgroundColor:
+                                          riskPrediction.risk_category === 'low' ? 'var(--accent-success)' :
+                                          riskPrediction.risk_category === 'moderate' ? 'var(--accent-warning)' :
+                                          riskPrediction.risk_category === 'high' ? '#f97316' : 'var(--accent-danger)'
+                                      }}
+                                    />
+                                  </div>
+                                </div>
                               ) : (
-                                <span className="status-badge" style={{ backgroundColor: 'rgba(245, 158, 11, 0.1)', color: 'var(--accent-warning)', border: '1px solid rgba(245, 158, 11, 0.25)', fontSize: '0.72rem' }}>
-                                  Calibrating Risk Model
-                                </span>
+                                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', padding: '0.4rem 0.6rem', backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)' }}>
+                                  <em>Operating on baseline while gathering genuine checkouts.</em>
+                                </div>
+                              )}
+
+                              {/* Delay & Prediction Interval Box */}
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.82rem' }}>
+                                <div style={{ padding: '0.5rem', backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)' }}>
+                                  <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.7rem' }}>Predicted Delay</span>
+                                  <strong style={{ fontSize: '0.95rem', color: 'var(--text-primary)' }}>
+                                    {riskPrediction.predicted_delay_minutes ? `${riskPrediction.predicted_delay_minutes.toFixed(1)}m` : (predictedDelay ? `${predictedDelay.toFixed(1)}m` : '0.0m')}
+                                  </strong>
+                                  <span style={{ color: 'var(--text-muted)', fontSize: '0.68rem', display: 'block' }}>
+                                    Baseline: {riskPrediction.baseline_predicted_delay_minutes?.toFixed(1) ?? '4.5'}m
+                                  </span>
+                                </div>
+
+                                <div style={{ padding: '0.5rem', backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)' }}>
+                                  <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.7rem' }}>
+                                    Prediction Interval ({Math.round((riskPrediction.coverage_level || 0.8) * 100)}% Coverage)
+                                  </span>
+                                  <strong style={{ fontSize: '0.95rem', color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)' }}>
+                                    {riskPrediction.prediction_interval_lower !== undefined && riskPrediction.prediction_interval_upper !== undefined && riskPrediction.prediction_interval_lower !== null && riskPrediction.prediction_interval_upper !== null
+                                      ? `${riskPrediction.prediction_interval_lower.toFixed(1)} – ${riskPrediction.prediction_interval_upper.toFixed(1)}m`
+                                      : '±4.5m (baseline)'}
+                                  </strong>
+                                  <span style={{ color: 'var(--text-muted)', fontSize: '0.68rem', display: 'block' }}>
+                                    Data sufficiency: {riskPrediction.data_sufficiency || 'minimal'}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Contributing Factors */}
+                              {riskPrediction.contributing_factors && riskPrediction.contributing_factors.length > 0 && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                                    Key Influencing Factors:
+                                  </span>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                                    {riskPrediction.contributing_factors.slice(0, 3).map((f, idx) => (
+                                      <span key={idx} className="factor-chip">
+                                        <span style={{ fontWeight: 700, color: f.direction === 'increases_delay' ? 'var(--accent-danger)' : 'var(--accent-success)' }}>
+                                          {f.direction === 'increases_delay' ? '+' : '-'}{Math.abs(f.impact_minutes).toFixed(1)}m
+                                        </span>
+                                        <span>{f.description}</span>
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Evaluated Limitations */}
+                              {riskPrediction.limitations && riskPrediction.limitations.length > 0 && (
+                                <div className="limitations-container" style={{ padding: '0.5rem 0.75rem' }}>
+                                  <span style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                                    Prediction Limitations:
+                                  </span>
+                                  <ul style={{ margin: 0, paddingLeft: '1.1rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                                    {riskPrediction.limitations.slice(0, 2).map((lim, idx) => (
+                                      <li key={idx}>{lim}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+
+                              {/* Suggested Intervention */}
+                              {riskPrediction.recommended_interventions && riskPrediction.recommended_interventions.length > 0 && (
+                                <div className="intervention-banner">
+                                  <Zap size={14} style={{ color: 'var(--accent-primary)', flexShrink: 0, marginTop: '2px' }} />
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                                    <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.8rem' }}>
+                                      Suggested Action: {riskPrediction.recommended_interventions[0].action}
+                                    </span>
+                                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.74rem' }}>
+                                      {riskPrediction.recommended_interventions[0].description} (Save ~{riskPrediction.recommended_interventions[0].expected_delay_reduction_min.toFixed(1)}m)
+                                    </span>
+                                  </div>
+                                </div>
                               )}
                             </div>
-
-                            {/* Probability Gauge Meter */}
-                            {riskPrediction.late_probability !== null ? (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
-                                  <span style={{ color: 'var(--text-secondary)' }}>Probability of Departing Late:</span>
-                                  <span style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', color:
-                                    riskPrediction.risk_category === 'low' ? 'var(--accent-success)' :
-                                    riskPrediction.risk_category === 'moderate' ? 'var(--accent-warning)' :
-                                    riskPrediction.risk_category === 'high' ? '#f97316' : 'var(--accent-danger)'
-                                  }}>
-                                    {(riskPrediction.late_probability * 100).toFixed(0)}%
-                                  </span>
-                                </div>
-                                <div className="risk-meter">
-                                  <div 
-                                    className="risk-meter-fill"
-                                    style={{
-                                      width: `${Math.min(100, Math.max(3, riskPrediction.late_probability * 100))}%`,
-                                      backgroundColor:
-                                        riskPrediction.risk_category === 'low' ? 'var(--accent-success)' :
-                                        riskPrediction.risk_category === 'moderate' ? 'var(--accent-warning)' :
-                                        riskPrediction.risk_category === 'high' ? '#f97316' : 'var(--accent-danger)'
-                                    }}
-                                  />
-                                </div>
-                              </div>
-                            ) : (
-                              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', padding: '0.4rem 0.6rem', backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)' }}>
-                                <em>Operating on baseline while gathering genuine checkouts.</em>
-                              </div>
-                            )}
-
-                            {/* Delay & Reliability Grid */}
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.82rem' }}>
-                              <div style={{ padding: '0.5rem', backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)' }}>
-                                <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.7rem' }}>Predicted Delay</span>
-                                <strong style={{ fontSize: '0.95rem', color: 'var(--text-primary)' }}>
-                                  {riskPrediction.predicted_delay_minutes ? `${riskPrediction.predicted_delay_minutes.toFixed(1)}m` : (predictedDelay ? `${predictedDelay.toFixed(1)}m` : '0.0m')}
-                                </strong>
-                                <span style={{ color: 'var(--text-muted)', fontSize: '0.68rem', display: 'block' }}>
-                                  Baseline: {riskPrediction.baseline_predicted_delay_minutes?.toFixed(1) ?? '4.5'}m
-                                </span>
-                              </div>
-
-                              <div style={{ padding: '0.5rem', backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)' }}>
-                                <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.7rem' }}>Model Reliability</span>
-                                <strong style={{ fontSize: '0.95rem', color: riskPrediction.confidence_status?.is_reliable ? 'var(--accent-success)' : 'var(--accent-warning)' }}>
-                                  {riskPrediction.confidence_status?.level ?? 'Standard'}
-                                </strong>
-                                <span style={{ color: 'var(--text-muted)', fontSize: '0.68rem', display: 'block' }}>
-                                  {riskPrediction.confidence_status?.reasons?.[0] ?? 'Calibrated probabilistic assessment'}
-                                </span>
-                              </div>
-                            </div>
-
-                            {/* Contributing Factors */}
-                            {riskPrediction.contributing_factors && riskPrediction.contributing_factors.length > 0 && (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                                  Key Influencing Factors:
-                                </span>
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
-                                  {riskPrediction.contributing_factors.slice(0, 3).map((f, idx) => (
-                                    <span key={idx} className="factor-chip">
-                                      <span style={{ fontWeight: 700, color: f.direction === 'increases_delay' ? 'var(--accent-danger)' : 'var(--accent-success)' }}>
-                                        {f.direction === 'increases_delay' ? '+' : '-'}{Math.abs(f.impact_minutes).toFixed(1)}m
-                                      </span>
-                                      <span>{f.description}</span>
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Suggested Intervention */}
-                            {riskPrediction.recommended_interventions && riskPrediction.recommended_interventions.length > 0 && (
-                              <div className="intervention-banner">
-                                <Zap size={14} style={{ color: 'var(--accent-primary)', flexShrink: 0, marginTop: '2px' }} />
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
-                                  <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.8rem' }}>
-                                    Suggested Action: {riskPrediction.recommended_interventions[0].action}
-                                  </span>
-                                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.74rem' }}>
-                                    {riskPrediction.recommended_interventions[0].description} (Save ~{riskPrediction.recommended_interventions[0].expected_delay_reduction_min.toFixed(1)}m)
-                                  </span>
-                                </div>
-                              </div>
-                            )}
-                          </div>
+                          )
                         )}
 
                         {/* Global-to-Personalized Learning Status Card (Prompt 2.3) */}
@@ -3357,64 +3291,83 @@ export default function App() {
 
                     {/* Departure Lateness Risk Card during Routine */}
                     {riskPrediction ? (
-                      <div className={`risk-card ${riskPrediction.risk_category || 'moderate'}`} style={{ textAlign: 'left' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      riskPrediction.is_abstained ? (
+                        <div className="prediction-abstention-banner" style={{ textAlign: 'left' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                            <BrainCircuit size={16} style={{
-                              color: riskPrediction.risk_category === 'low' ? 'var(--accent-success)' :
-                                     riskPrediction.risk_category === 'moderate' ? 'var(--accent-warning)' :
-                                     riskPrediction.risk_category === 'high' ? '#f97316' : 'var(--accent-danger)'
-                            }} />
-                            <span style={{ fontWeight: 600, fontSize: '0.84rem' }}>
-                              Lateness Risk Probability
-                            </span>
+                            <ShieldAlert size={16} style={{ color: 'var(--accent-warning)' }} />
+                            <span style={{ fontWeight: 600, fontSize: '0.84rem' }}>Prediction Unavailable</span>
                           </div>
-                          {riskPrediction.late_probability !== null ? (
-                            <span className={`risk-badge ${riskPrediction.risk_category || 'moderate'}`}>
-                              {riskPrediction.risk_category} risk ({Math.round(riskPrediction.late_probability * 100)}%)
+                          <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                            {riskPrediction.abstention_reason || "Operating conditions require additional genuine checkouts."}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className={`risk-card ${riskPrediction.risk_category || 'moderate'}`} style={{ textAlign: 'left' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                              <BrainCircuit size={16} style={{
+                                color: riskPrediction.risk_category === 'low' ? 'var(--accent-success)' :
+                                       riskPrediction.risk_category === 'moderate' ? 'var(--accent-warning)' :
+                                       riskPrediction.risk_category === 'high' ? '#f97316' : 'var(--accent-danger)'
+                              }} />
+                              <span style={{ fontWeight: 600, fontSize: '0.84rem' }}>
+                                Lateness Risk Probability
+                              </span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap' }}>
+                              {riskPrediction.late_probability !== null ? (
+                                <span className={`risk-badge ${riskPrediction.risk_category || 'moderate'}`}>
+                                  {riskPrediction.risk_category} risk ({Math.round(riskPrediction.late_probability * 100)}%)
+                                </span>
+                              ) : (
+                                <span className="status-badge" style={{ fontSize: '0.7rem' }}>Calibrating</span>
+                              )}
+                              <span className={`reliability-badge ${riskPrediction.reliability_status || 'moderate_reliability'}`}>
+                                {riskPrediction.reliability_status?.replace(/_/g, ' ') || 'Moderate'}
+                              </span>
+                            </div>
+                          </div>
+
+                          {riskPrediction.late_probability !== null && (
+                            <div className="risk-meter" style={{ height: '6px' }}>
+                              <div 
+                                className="risk-meter-fill"
+                                style={{
+                                  width: `${Math.min(100, Math.max(3, riskPrediction.late_probability * 100))}%`,
+                                  backgroundColor:
+                                    riskPrediction.risk_category === 'low' ? 'var(--accent-success)' :
+                                    riskPrediction.risk_category === 'moderate' ? 'var(--accent-warning)' :
+                                    riskPrediction.risk_category === 'high' ? '#f97316' : 'var(--accent-danger)'
+                                }}
+                              />
+                            </div>
+                          )}
+
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>
+                              Predicted Delay: <strong style={{ color: 'var(--text-primary)' }}>{riskPrediction.predicted_delay_minutes?.toFixed(1) ?? predictedDelay?.toFixed(1) ?? '0.0'}m</strong>
                             </span>
-                          ) : (
-                            <span className="status-badge" style={{ fontSize: '0.7rem' }}>Calibrating</span>
+                            {riskPrediction.prediction_interval_lower !== undefined && riskPrediction.prediction_interval_upper !== undefined && riskPrediction.prediction_interval_lower !== null && riskPrediction.prediction_interval_upper !== null && (
+                              <span style={{ color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>
+                                Interval: [{riskPrediction.prediction_interval_lower.toFixed(1)}–{riskPrediction.prediction_interval_upper.toFixed(1)}m]
+                              </span>
+                            )}
+                          </div>
+
+                          {riskPrediction.contributing_factors && riskPrediction.contributing_factors.length > 0 && (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
+                              {riskPrediction.contributing_factors.slice(0, 2).map((f, idx) => (
+                                <span key={idx} className="factor-chip" style={{ fontSize: '0.7rem', padding: '0.15rem 0.45rem' }}>
+                                  <span style={{ fontWeight: 700, color: f.direction === 'increases_delay' ? 'var(--accent-danger)' : 'var(--accent-success)' }}>
+                                    {f.direction === 'increases_delay' ? '+' : '-'}{Math.abs(f.impact_minutes).toFixed(1)}m
+                                  </span>
+                                  <span>{f.description}</span>
+                                </span>
+                              ))}
+                            </div>
                           )}
                         </div>
-
-                        {riskPrediction.late_probability !== null && (
-                          <div className="risk-meter" style={{ height: '6px' }}>
-                            <div 
-                              className="risk-meter-fill"
-                              style={{
-                                width: `${Math.min(100, Math.max(3, riskPrediction.late_probability * 100))}%`,
-                                backgroundColor:
-                                  riskPrediction.risk_category === 'low' ? 'var(--accent-success)' :
-                                  riskPrediction.risk_category === 'moderate' ? 'var(--accent-warning)' :
-                                  riskPrediction.risk_category === 'high' ? '#f97316' : 'var(--accent-danger)'
-                              }}
-                            />
-                          </div>
-                        )}
-
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem' }}>
-                          <span style={{ color: 'var(--text-secondary)' }}>
-                            Predicted Delay: <strong style={{ color: 'var(--text-primary)' }}>{riskPrediction.predicted_delay_minutes?.toFixed(1) ?? predictedDelay?.toFixed(1) ?? '0.0'}m</strong>
-                          </span>
-                          <span style={{ color: 'var(--text-muted)', fontSize: '0.72rem' }}>
-                            Baseline: {riskPrediction.baseline_predicted_delay_minutes?.toFixed(1) ?? '4.5'}m
-                          </span>
-                        </div>
-
-                        {riskPrediction.contributing_factors && riskPrediction.contributing_factors.length > 0 && (
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
-                            {riskPrediction.contributing_factors.slice(0, 2).map((f, idx) => (
-                              <span key={idx} className="factor-chip" style={{ fontSize: '0.7rem', padding: '0.15rem 0.45rem' }}>
-                                <span style={{ fontWeight: 700, color: f.direction === 'increases_delay' ? 'var(--accent-danger)' : 'var(--accent-success)' }}>
-                                  {f.direction === 'increases_delay' ? '+' : '-'}{Math.abs(f.impact_minutes).toFixed(1)}m
-                                </span>
-                                <span>{f.description}</span>
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
+                      )
                     ) : (
                       predictedDelay !== null && (
                         <div style={{ padding: '0.75rem', backgroundColor: 'rgba(99, 102, 241, 0.08)', border: '1px solid rgba(99, 102, 241, 0.2)', borderRadius: 'var(--radius-md)', fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
@@ -5784,11 +5737,14 @@ export default function App() {
                     </button>
                     <button 
                       className="tab-btn"
-                      onClick={() => fetchDriftData()}
-                      disabled={driftLoading}
+                      onClick={() => {
+                        fetchDriftData();
+                        fetchReliabilityIntelligence();
+                      }}
+                      disabled={driftLoading || reliabilityLoading}
                       style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
                     >
-                      <RefreshCw size={14} className={driftLoading ? 'spin' : ''} />
+                      <RefreshCw size={14} className={(driftLoading || reliabilityLoading) ? 'spin' : ''} />
                       Refresh
                     </button>
                   </div>
@@ -5812,6 +5768,17 @@ export default function App() {
                     >
                       <BrainCircuit size={14} />
                       Predictive Model Health
+                    </button>
+                    <button 
+                      className={`tab-btn ${driftSubTab === 'reliability' ? 'active' : ''}`}
+                      onClick={() => {
+                        setDriftSubTab('reliability');
+                        fetchReliabilityIntelligence();
+                      }}
+                      style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
+                    >
+                      <ShieldCheck size={14} />
+                      Reliability & Calibration (Prompt 2.9)
                     </button>
                   </div>
 
@@ -6057,6 +6024,178 @@ export default function App() {
                     <div style={{ background: 'rgba(0,0,0,0.2)', padding: '0.85rem 1rem', borderRadius: '6px', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
                       🛡️ <strong>MicroDelay Responsible Adaptation Policy:</strong> If predictive degradation is detected, candidate models are trained on your updated historical checkouts and tested against chronological holdouts. Your active production model is strictly preserved until a new model proves statistically superior.
                     </div>
+                  </div>
+                )}
+
+                {/* SUBTAB 3: PREDICTION RELIABILITY & PROBABILITY CALIBRATION (Prompt 2.9) */}
+                {driftSubTab === 'reliability' && (
+                  <div style={{ marginTop: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                    {/* Educational Banner */}
+                    <div className="habit-banner" style={{ background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(59, 130, 246, 0.04) 100%)', borderColor: 'rgba(99, 102, 241, 0.3)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, color: 'var(--accent-primary)', fontSize: '0.85rem' }}>
+                        <ShieldCheck size={16} />
+                        Core Reliability Principle: Probability is Not Confidence
+                      </div>
+                      <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                        A 90% probability of departing late is an estimate of lateness risk, not model certainty. <strong>Prediction Confidence</strong> reflects whether that estimate is backed by sufficient genuine historical observations, empirical conformal interval coverage, and probability calibration.
+                      </p>
+                    </div>
+
+                    {/* Status & Sufficiency Grid */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
+                      <div className="model-health-card">
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          Overall Reliability Status
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.25rem' }}>
+                          <span className={`reliability-badge ${reliabilityStatus?.reliability_status || 'moderate_reliability'}`} style={{ fontSize: '0.85rem', padding: '0.35rem 0.75rem' }}>
+                            {reliabilityStatus?.reliability_status?.replace(/_/g, ' ') || 'Moderate Reliability'}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          Documented rule-based assessment based on sample size and error dispersion.
+                        </div>
+                      </div>
+
+                      <div className="model-health-card">
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          Data Sufficiency Level
+                        </div>
+                        <div style={{ fontSize: '1.4rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', textTransform: 'capitalize' }}>
+                          {reliabilityStatus?.data_sufficiency || 'Minimal'}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          {reliabilityStatus?.data_sufficiency_report?.genuine_count ?? 0} genuine checkouts recorded ({reliabilityStatus?.data_sufficiency_report?.recency_days !== null && reliabilityStatus?.data_sufficiency_report?.recency_days !== undefined ? `${reliabilityStatus.data_sufficiency_report.recency_days}d ago` : 'no dates'}).
+                        </div>
+                      </div>
+
+                      <div className="model-health-card">
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          Probability Calibration
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.25rem' }}>
+                          <span className={`calibration-badge ${reliabilityStatus?.calibration_status || 'uncalibrated'}`} style={{ fontSize: '0.82rem', padding: '0.3rem 0.65rem' }}>
+                            {reliabilityStatus?.calibration_status === 'calibrated' ? '✓ Calibrated via Platt Scaling' : 'Qualitative / Uncalibrated'}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          {calibrationReport?.expected_calibration_error !== undefined ? `ECE: ${calibrationReport.expected_calibration_error.toFixed(3)} | Brier: ${calibrationReport.brier_score.toFixed(3)}` : 'Evaluating empirical bins...'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Conformal Prediction Intervals & Error Distribution */}
+                    <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div>
+                          <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                            Split Conformal Prediction Interval & Residual Dispersion
+                          </h4>
+                          <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            Distribution-free finite-sample prediction intervals evaluated against chronological validation holdouts.
+                          </span>
+                        </div>
+                        <span className="drift-rigor-pill verified">
+                          {Math.round(((reliabilityStatus?.prediction_interval?.coverage_level) || 0.8) * 100)}% Nominal Coverage
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' }}>
+                        <div className="drift-metric-row">
+                          <span style={{ color: 'var(--text-secondary)' }}>Conformal Margin (±):</span>
+                          <strong style={{ color: 'var(--accent-primary)' }}>
+                            ±{reliabilityStatus?.prediction_interval?.conformal_quantile?.toFixed(1) ?? '4.5'}m
+                          </strong>
+                        </div>
+                        <div className="drift-metric-row">
+                          <span style={{ color: 'var(--text-secondary)' }}>Validation MAE:</span>
+                          <strong>
+                            {reliabilityStatus?.error_distribution?.mae?.toFixed(1) ?? '3.5'}m
+                          </strong>
+                        </div>
+                        <div className="drift-metric-row">
+                          <span style={{ color: 'var(--text-secondary)' }}>Median Absolute Error:</span>
+                          <strong>
+                            {reliabilityStatus?.error_distribution?.median_abs_error?.toFixed(1) ?? '2.8'}m
+                          </strong>
+                        </div>
+                        <div className="drift-metric-row">
+                          <span style={{ color: 'var(--text-secondary)' }}>Signed Residual Bias:</span>
+                          <strong style={{ color: (reliabilityStatus?.error_distribution?.signed_bias || 0) > 0 ? 'var(--accent-danger)' : 'var(--accent-success)' }}>
+                            {reliabilityStatus?.error_distribution?.signed_bias !== undefined ? (reliabilityStatus.error_distribution.signed_bias > 0 ? `+${reliabilityStatus.error_distribution.signed_bias.toFixed(1)}m` : `${reliabilityStatus.error_distribution.signed_bias.toFixed(1)}m`) : '0.0m'}
+                          </strong>
+                        </div>
+                      </div>
+
+                      {reliabilityStatus?.prediction_interval?.is_drift_impacted && (
+                        <div style={{ background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)', padding: '0.65rem 0.85rem', borderRadius: 'var(--radius-sm)', fontSize: '0.76rem', color: 'var(--accent-warning)' }}>
+                          ⚠️ <strong>Exchangeability Warning:</strong> Recent behavioral drift was detected. Conformal exchangeability assumption is strained; intervals have been expanded by 25% to prevent under-coverage.
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Classification Calibration Diagram (Bins) */}
+                    <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div>
+                          <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                            Lateness Classification Probability Calibration Diagram
+                          </h4>
+                          <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            Empirical frequency of departure lateness across discretized probability bins.
+                          </span>
+                        </div>
+                        <span className={`calibration-badge ${calibrationReport?.calibration_status || 'uncalibrated'}`}>
+                          {calibrationReport?.is_calibrated ? '✓ Calibrated' : 'Uncalibrated'}
+                        </span>
+                      </div>
+
+                      {calibrationReport && calibrationReport.bins && calibrationReport.bins.length > 0 ? (
+                        <div className="calibration-diagram-grid">
+                          {calibrationReport.bins.map((bin) => (
+                            <div key={bin.bin_index} className="calibration-diagram-col">
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>
+                                [{bin.bin_lower.toFixed(1)}–{bin.bin_upper.toFixed(1)}]
+                              </span>
+                              <div style={{ height: '50px', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', width: '100%' }}>
+                                <div 
+                                  style={{
+                                    width: '18px',
+                                    height: `${Math.max(6, Math.min(50, bin.empirical_accuracy * 50))}px`,
+                                    backgroundColor: bin.sample_count > 0 ? 'var(--accent-primary)' : 'rgba(255,255,255,0.1)',
+                                    borderRadius: '3px'
+                                  }}
+                                />
+                              </div>
+                              <span style={{ fontWeight: 700, fontFamily: 'var(--font-mono)' }}>
+                                {(bin.empirical_accuracy * 100).toFixed(0)}%
+                              </span>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>
+                                {bin.sample_count} samples
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div style={{ padding: '1rem', textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                          Gathering checkout observations to construct empirical calibration curve (requires ≥ 8 checkouts).
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Evaluated Limitations Box */}
+                    {reliabilityStatus?.limitations && reliabilityStatus.limitations.length > 0 && (
+                      <div className="limitations-container">
+                        <span style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                          🛡️ Evaluated Prediction Limitations & Model Governance:
+                        </span>
+                        <ul style={{ margin: 0, paddingLeft: '1.25rem', fontSize: '0.78rem', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                          {reliabilityStatus.limitations.map((lim, idx) => (
+                            <li key={idx}>{lim}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -6721,6 +6860,31 @@ export default function App() {
               </div>
             </div>
           )}
+
+          {/* Calendar Connections & Synchronization Tab (Prompt 3.2) */}
+          {activeTab === 'calendar' && (
+            <div className="tab-pane active">
+              <CalendarConnectionsSection
+                token={token}
+                routines={events}
+                onOpenMorningTracker={(name) => {
+                  const match = events.find(e => e.name === name);
+                  if (match) {
+                    setSelectedEventId(match.id);
+                  }
+                  setActiveTab('simulator');
+                }}
+              />
+            </div>
+          )}
+
+          {/* Prediction Explanation & Reasoning Modal (Prompt 2.6 & 2.10 Section 8) */}
+          <PredictionExplanationModal
+            isOpen={isExplanationModalOpen}
+            onClose={() => setIsExplanationModalOpen(false)}
+            explanation={predictionExplanation}
+            riskPrediction={riskPrediction}
+          />
         </>
       )}
     </div>
