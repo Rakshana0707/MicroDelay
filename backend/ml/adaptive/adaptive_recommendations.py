@@ -20,9 +20,30 @@ class AdaptiveRecommendationEngine:
         context: PredictionContext,
         predicted_delay_min: float,
         contributing_factors: List[Dict[str, Any]],
-        profile_data: Optional[Dict[str, Any]] = None
+        profile_data: Optional[Dict[str, Any]] = None,
+        db: Optional[Any] = None
     ) -> List[Dict[str, Any]]:
         """Synthesize prioritized, high-impact behavioral interventions."""
+        try:
+            # 1. If db is available, attempt evidence-driven InterventionService
+            if db is not None and getattr(context, "user_id", None):
+                try:
+                    from ml.recommendations import InterventionService
+                except ModuleNotFoundError:
+                    from backend.ml.recommendations import InterventionService
+
+                service_recs = InterventionService.get_personalized_recommendations(
+                    db=db,
+                    user_id=context.user_id,
+                    context=context,
+                    limit=3
+                )
+                if service_recs:
+                    return service_recs
+
+        except Exception as e:
+            logger.warning("Could not generate recommendations from InterventionService: %s", e)
+
         recommendations: List[RecommendedIntervention] = []
 
         try:

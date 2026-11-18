@@ -498,7 +498,161 @@ Furthermore, unmeasured environmental variables (sudden traffic bottlenecks, sev
   - **Morning Tracker / Simulator:** Expandable **"Why This Prediction?"** card with method badge, factor filter buttons (`All`, `Delay Increasers`, `Mitigating Factors`), epistemic source chips, personal baseline comparisons, and scientific disclaimer.
   - **Model Intelligence Tab:** Global Feature Importance ranking with Recharts bar chart, human-accessible feature sensitivity breakdown, and historical prediction explanations audit table.
 
+---
 
+## 11. Adaptive Personalized Recommendation & Habit Intervention Engine (Prompt 2.7)
 
+### 11.1 Architecture & Problem Statement
+Prior recommendation solutions in MicroDelay relied on static persona-based rules (e.g. generic tips for "students" or "professors"). MicroDelay 2.0 transforms this into an **evidence-driven, closed-loop behavioral intervention engine**. 
+Instead of generic advice, recommendations are strictly diagnosed from an individual's actual historical departure checkouts, tracked through an active trial lifecycle, evaluated with pre/post statistical deltas, and adaptively re-prioritized based on empirical success, user feedback, and dismissal fatigue cooling.
 
+```mermaid
+flowchart TD
+    Logs["User Departure Logs & Checkout History"] --> Diag["RecommendationEligibilityEvaluator"]
+    Diag --> Catalog[("14-Item Structured Catalog")]
+    Catalog --> Prioritizer["AdaptivePrioritizer"]
+    Prioritizer -->|"Multi-Criteria Scoring"| RankedRecs["Ranked Personalized Interventions"]
+    RankedRecs --> UserUI["Frontend Habits & Interventions UI"]
+    UserUI -->|"Accept Habit"| ActiveTrial["Active Intervention Trial + Baseline Snapshot"]
+    ActiveTrial --> PostCheckouts["Subsequent Departure Checkouts"]
+    PostCheckouts --> Complete["Complete Intervention + Rating & Feedback"]
+    Complete --> Evaluator["EffectivenessMeasurementService"]
+    Evaluator -->|"Delta Delay, Delta Lateness Rate, Confounders"| Outcome[("Measured Outcome Record")]
+    Outcome -->|"Effectiveness Boost"| Prioritizer
+    UserUI -->|"Dismiss / Snooze"| FatigueCooldown["Dismissal Cooling & Snooze Filter"]
+    FatigueCooldown --> Prioritizer
+```
+
+---
+
+### 11.2 Structured 14-Item Recommendation Catalog Across 4 Domains
+The catalog (`backend/ml/recommendations.py:RECOMMENDATION_CATALOG`) provides 14 structured, actionable interventions:
+
+1. **Preparation Habits:**
+   - `prep_bag_previous_night`: Pack bag and equipment the previous evening (target: unprepared bag doorway bottlenecks).
+   - `prep_fixed_item_location`: Designate a permanent doorway drop tray for keys, badges, and chargers (target: frequent item search delays).
+   - `prep_clothing_in_advance`: Select attire and outerwear before sleeping (target: morning wardrobe decision delays).
+   - `prep_materials_digital_sync`: Sync essential devices, laptops, and chargers overnight (target: device charging/file search delays).
+
+2. **Distraction Mitigation:**
+   - `distract_prep_focus_mode`: Enable Preparation Do-Not-Disturb on mobile device (target: phone usage during prep).
+   - `distract_delay_phone_check`: Defer social media, chat, and news feeds until after departure (target: social media rabbit holes).
+   - `distract_reduce_notifications`: Mute non-critical app alerts during departure windows (target: notification interruptions).
+
+3. **Time Estimation Calibration:**
+   - `time_increase_prep_buffer`: Add a calibrated buffer to planned prep based on empirical prep bias (target: chronic prep underestimation).
+   - `time_use_historical_prep_avg`: Substitute subjective estimates with empirical historical average prep duration (target: optimism bias).
+   - `time_realistic_travel_buffer`: Expand transit margin by 15-20% (target: underestimated commute delays).
+   - `time_monday_morning_rule`: Add specific 10-15 minute padding for high-stakes Monday departures (target: Monday morning inertia).
+
+4. **Routine Consistency:**
+   - `routine_start_recurring_earlier`: Shift alarm and prep start 10 minutes earlier for high-priority recurring events.
+   - `routine_prepare_materials_before_sleep`: Stage next morning's materials before going to sleep.
+   - `routine_fixed_departure_sequence`: Establish a standard 5-step doorway sequence (jacket -> bag -> keys -> check -> leave).
+
+---
+
+### 11.3 Behavioral Problem Diagnosis & Eligibility Linking
+Every intervention is strictly conditioned on diagnosed empirical bottlenecks (`RecommendationEligibilityEvaluator`):
+- **Item Searches:** Triggered when user has $\ge 2$ logs with `tag_finding_items = True` or `delay_finding_items_min > 2.0`.
+- **Preparation Underestimation:** Triggered when mean prep bias ($\text{actual} - \text{planned prep}$) exceeds $+3.0$ minutes in $\ge 3$ checkouts.
+- **Phone Distraction:** Triggered when user records $\ge 2$ logs with `tag_phone_usage = True` or `delay_phone_usage_min > 3.0`.
+- **Doorway Friction:** Triggered when user leaves bag unprepared in $\ge 40\%$ of historical logs.
+- **Monday Inertia:** Triggered when Monday departure delay is $\ge 4.0$ minutes higher than mid-week averages.
+
+Each recommendation carries a detailed `supporting_evidence` audit payload:
+```json
+{
+  "problem_frequency_pct": 80.0,
+  "observed_overhead_min": 4.5,
+  "sample_count": 5,
+  "affected_sessions": 4,
+  "metric_name": "delay_finding_items_min",
+  "supporting_statement": "Triggered by frequent item searches (keys, wallet, badge) in 80% of your departure routines."
+}
+```
+
+---
+
+### 11.4 Adaptive Multi-Criteria Prioritization Formula
+Eligible suggestions are prioritized dynamically using an adaptive scoring formula:
+
+$$\text{Priority Score} = (\text{Evidence Weight} \times \text{Expected Reduction}) \times \text{Effort Multiplier} \times \text{Past Boost} \times \text{Fatigue Penalty}$$
+
+Where:
+- **Evidence Weight:** Problem frequency percentage scaled to range $[0.5, 1.0]$.
+- **Expected Delay Reduction:** Base catalog reduction calibrated by personal observed overhead.
+- **Effort Multiplier:** High effort = $0.70$, Medium = $0.85$, Low = $1.00$.
+- **Past Effectiveness Boost:**
+  - $+20\%$ boost if the user rated the intervention $\ge 4$ stars in past trials.
+  - $+25\%$ boost if past empirical evaluation produced a `success` label ($\ge 3.0$ min delay reduction).
+- **Fatigue Cooling Penalty:**
+  - If dismissed $< 14$ days ago: score multiplied by $(1.0 - 0.70 \times (1 - \text{days\_since} / 14))$.
+  - If currently snoozed ($\text{now} < \text{snoozed\_until}$): score set to $0.0$ (completely hidden).
+  - If currently active in progress: excluded from eligible suggestions list.
+
+---
+
+### 11.5 Intervention Lifecycle & State Machine
+Interventions are managed via persistent records (`UserInterventionRecord` mapped to table `user_interventions` in `backend/database.py`):
+```
+[suggested] ---> [accepted / started] ---> [completed (evaluated)]
+     |                    |
+     +---->[dismissed]    +---->[dismissed]
+     |
+     +---->[snoozed (7-14d)]
+```
+
+When an intervention is accepted:
+1. `started_at` is timestamped.
+2. An immutable snapshot of the user's `baseline_metrics` is captured:
+   - `avg_departure_delay_min`
+   - `lateness_rate`
+   - `avg_prep_bias_min`
+   - `sample_count`
+
+---
+
+### 11.6 Empirical Effectiveness Measurement & Confounder Guardrails
+When a user completes an active trial, `EffectivenessMeasurementService` evaluates post-intervention departure logs recorded after `started_at`:
+- **Statistical Deltas:**
+  - $\Delta \text{Average Delay} = \text{post\_avg\_delay} - \text{baseline\_avg\_delay}$
+  - $\Delta \text{Lateness Rate} = \text{post\_lateness\_rate} - \text{baseline\_lateness\_rate}$
+  - $\Delta \text{Prep Bias} = \text{post\_prep\_bias} - \text{baseline\_prep\_bias}$
+- **Outcome Labels:**
+  - `success`: Delay reduced by $\ge 3.0$ min or lateness rate reduced by $\ge 20\%$.
+  - `partial_success`: Delay reduced by $1.0$ to $3.0$ min.
+  - `neutral`: Delta between $-1.0$ and $+1.5$ min.
+  - `regressed`: Delay increased by $> 1.5$ min.
+  - `insufficient_post_observations`: Fewer than 2 departure checkouts recorded during trial window.
+- **Confounding Variables Detected:**
+  - Small post sample size ($< 5$ checkouts).
+  - High variance in planned prep duration.
+  - Inconsistent routine start times across trial period.
+- **Scientific Causation Notice:**
+  > *"Scientific Notice: Observed improvements in departure punctuality correlate with the intervention period but do not prove sole causation. Unmeasured factors such as external weather, traffic, schedule shifts, or temporary motivation may also contribute."*
+
+---
+
+### 11.7 User Control & REST API Endpoints
+- `GET /api/recommendations/personalized?limit=6`: Returns eligible recommendations adaptively ranked by evidence and benefit.
+- `GET /api/interventions?status=...`: Lists user interventions filtered by status (`suggested`, `accepted`, `completed`, `dismissed`, `snoozed`).
+- `POST /api/interventions/accept`: Accepts a suggestion, creates active trial record, and captures baseline snapshot.
+- `POST /api/interventions/dismiss`: Dismisses an intervention, initiating a 14-day cooling penalty.
+- `POST /api/interventions/snooze`: Temporarily conceals the recommendation for specified days (default 7 days).
+- `POST /api/interventions/complete`: Completes trial, records 1-5 star user rating and notes, and triggers empirical before/after effectiveness evaluation.
+- `POST /api/interventions/feedback`: Submits user rating and qualitative reflection notes.
+- `GET /api/interventions/{intervention_id}/effectiveness`: Inspects granular empirical impact metrics and confounding variables.
+
+---
+
+### 11.8 Frontend Experience (`frontend/src/App.tsx` & `frontend/src/index.css`)
+- **Dashboard Spotlight:** Evidence-Driven Intervention Spotlight card displaying the active trial in progress or top eligible recommendations with direct navigation to the interventions pane.
+- **Dedicated Habits & Interventions Tab:**
+  - Multi-status filter tabs: `All`, `Eligible Suggestions`, `Active In Progress`, `Completed & Measured`.
+  - Eligible suggestions cards with priority rank, category pill, diagnosed bottleneck evidence box, estimated delay savings chip, and collapsible step-by-step instructions.
+  - Interactive Action Controls: **Start Habit Trial**, **Snooze 7d**, **Dismiss**.
+  - Active Trial Tracker with baseline metric snapshot, active status badge, and **Complete & Review** trigger.
+  - Completed Trials Showcase displaying measured before/after impact chips (Delay $\Delta$, Lateness $\Delta$), 5-star user rating, qualitative notes, confounder tags, and scientific causation disclaimer.
+  - **Completion Feedback Modal:** Interactive dialog enabling 1-5 star ratings, helpfulness toggle, and qualitative user reflection notes.
 

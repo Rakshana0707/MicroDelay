@@ -11,6 +11,7 @@ Verifies the complete Phase 1 pipeline:
 8. Predict endpoint & routine management.
 """
 
+import datetime
 import pytest
 from database import User, DepartureLog, Event, ModelVersionRecord
 
@@ -52,10 +53,11 @@ def test_full_phase1_end_to_end_user_journey(client, db_session):
     assert all(log["provenance"] == "synthetic" for log in initial_logs)
 
     # 3. Complete a genuine departure checkout in Morning Simulator
+    today_str = datetime.date.today().isoformat()
     checkout_payload = {
         "event_name": "ML Lab",
         "day_of_week": "Monday",
-        "date": "2026-11-16",
+        "date": today_str,
         "importance": "high",
         "planned_prep_start": "07:45:00",
         "planned_departure": "08:10:00",
@@ -96,7 +98,9 @@ def test_full_phase1_end_to_end_user_journey(client, db_session):
     assert logs_resp2.status_code == 200
     updated_logs = logs_resp2.json()
     assert len(updated_logs) == len(initial_logs) + 1
-    latest_log = updated_logs[0]
+    real_logs = [l for l in updated_logs if not l["is_synthetic"]]
+    assert len(real_logs) == 1
+    latest_log = real_logs[0]
     assert latest_log["is_synthetic"] is False
     assert latest_log["provenance"] == "real"
     assert latest_log["data_source"] == "simulator_checkout"

@@ -33,7 +33,12 @@ import {
   Sparkles,
   TrendingDown,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Star,
+  ThumbsUp,
+  ThumbsDown,
+  CheckCircle2,
+  Target
 } from 'lucide-react';
 import {
   AreaChart,
@@ -324,6 +329,70 @@ interface GlobalFeatureImportanceData {
   top_feature?: string;
   evaluated_at: string;
   message?: string;
+}
+
+// Adaptive Personalized Interventions Interfaces (Prompt 2.7)
+interface SupportingEvidenceData {
+  problem_frequency_pct?: number;
+  problem_frequency?: number;
+  observed_overhead_min?: number;
+  sample_count?: number;
+  affected_sessions?: number;
+  metric_name?: string;
+  metric_value?: string;
+  supporting_statement?: string;
+  statement?: string;
+}
+
+interface MeasuredOutcomeData {
+  status?: string;
+  outcome_label?: string;
+  is_improved?: boolean;
+  delay_delta_min?: number;
+  lateness_rate_delta?: number;
+  prep_bias_delta_min?: number;
+  baseline_avg_delay?: number;
+  post_avg_delay?: number;
+  baseline_lateness_rate?: number;
+  post_lateness_rate?: number;
+  baseline_sample_count?: number;
+  post_sample_count?: number;
+  target_metric?: string;
+  target_improvement?: boolean;
+  message?: string;
+  measured_at?: string;
+}
+
+interface InterventionData {
+  intervention_id: string;
+  recommendation_id: string;
+  category: 'preparation' | 'distraction' | 'timing' | 'routine_consistency';
+  action: string;
+  description: string;
+  implementation_steps: string[];
+  implementation_effort?: 'low' | 'medium' | 'high';
+  behavioral_problem: string;
+  supporting_evidence: SupportingEvidenceData;
+  expected_delay_reduction_min: number;
+  priority?: 'high' | 'medium' | 'low';
+  priority_score?: number;
+  status: 'suggested' | 'accepted' | 'started' | 'completed' | 'dismissed' | 'snoozed' | 'expired';
+  expected_outcome?: Record<string, any>;
+  measured_outcome?: MeasuredOutcomeData | null;
+  baseline_metrics?: Record<string, any> | null;
+  post_metrics?: Record<string, any> | null;
+  confounding_factors?: string[];
+  causation_disclaimer: string;
+  generated_at: string;
+  accepted_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  dismissed_at?: string | null;
+  snoozed_until?: string | null;
+  user_rating?: number | null;
+  user_feedback_notes?: string | null;
+  user_helpful?: boolean | null;
+  completion_status?: string | null;
 }
 
 interface RiskPredictionData {
@@ -655,7 +724,7 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
 
   // Tab State
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'comparison' | 'profile' | 'history' | 'routines'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'comparison' | 'profile' | 'interventions' | 'history' | 'routines'>('dashboard');
   
   // Data States
   const [events, setEvents] = useState<EventTemplate[]>([]);
@@ -731,6 +800,18 @@ export default function App() {
   const [explanationHistory, setExplanationHistory] = useState<PredictionExplanationData[]>([]);
   const [isExplanationExpanded, setIsExplanationExpanded] = useState<boolean>(true);
   const [auditFilter, setAuditFilter] = useState<'all' | 'increasing' | 'mitigating'>('all');
+
+  // Adaptive Personalized Interventions States (Prompt 2.7)
+  const [personalizedRecs, setPersonalizedRecs] = useState<InterventionData[]>([]);
+  const [userInterventions, setUserInterventions] = useState<InterventionData[]>([]);
+  const [interventionsLoading, setInterventionsLoading] = useState<boolean>(false);
+  const [actionInProgressId, setActionInProgressId] = useState<string | null>(null);
+  const [completingIntervention, setCompletingIntervention] = useState<InterventionData | null>(null);
+  const [feedbackRating, setFeedbackRating] = useState<number>(5);
+  const [feedbackNotes, setFeedbackNotes] = useState<string>('');
+  const [feedbackHelpful, setFeedbackHelpful] = useState<boolean>(true);
+  const [expandedInterventionId, setExpandedInterventionId] = useState<string | null>(null);
+  const [interventionTabFilter, setInterventionTabFilter] = useState<'all' | 'suggested' | 'active' | 'completed'>('all');
 
   // References for Simulator Clock
   const clockIntervalRef = useRef<any>(null);
@@ -1008,6 +1089,7 @@ export default function App() {
       // Load model intelligence artifacts in background
       fetchModelIntelligence(token);
       fetchBehavioralProfile(token);
+      fetchInterventions(token);
 
     } catch (e: any) {
       console.error(e);
@@ -1321,11 +1403,125 @@ export default function App() {
     }
   }, [token]);
 
+  // 8. Fetch Adaptive Personalized Interventions & Actionable Habits (Prompt 2.7)
+  const fetchInterventions = async (overrideToken?: string) => {
+    const activeToken = overrideToken || token;
+    if (!activeToken) return;
+    const headers = { 'Authorization': `Bearer ${activeToken}` };
+    setInterventionsLoading(true);
+
+    try {
+      const recsRes = await fetch(`${BACKEND_URL}/api/recommendations/personalized?limit=6`, { headers });
+      if (recsRes.ok) {
+        const recsData = await recsRes.json();
+        setPersonalizedRecs(recsData);
+      }
+    } catch (e) {
+      console.warn("Could not fetch personalized recommendations:", e);
+    }
+
+    try {
+      const intvRes = await fetch(`${BACKEND_URL}/api/interventions`, { headers });
+      if (intvRes.ok) {
+        const intvData = await intvRes.json();
+        setUserInterventions(intvData);
+      }
+    } catch (e) {
+      console.warn("Could not fetch user interventions:", e);
+    } finally {
+      setInterventionsLoading(false);
+    }
+  };
+
+  const handleAcceptIntervention = async (interventionId: string) => {
+    if (!token) return;
+    setActionInProgressId(interventionId);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/interventions/accept`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ intervention_id: interventionId })
+      });
+      if (res.ok) {
+        await fetchInterventions();
+      }
+    } catch (e) {
+      console.error("Error accepting intervention:", e);
+    } finally {
+      setActionInProgressId(null);
+    }
+  };
+
+  const handleDismissIntervention = async (interventionId: string) => {
+    if (!token) return;
+    setActionInProgressId(interventionId);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/interventions/dismiss`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ intervention_id: interventionId })
+      });
+      if (res.ok) {
+        await fetchInterventions();
+      }
+    } catch (e) {
+      console.error("Error dismissing intervention:", e);
+    } finally {
+      setActionInProgressId(null);
+    }
+  };
+
+  const handleSnoozeIntervention = async (interventionId: string, days: number = 7) => {
+    if (!token) return;
+    setActionInProgressId(interventionId);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/interventions/snooze`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ intervention_id: interventionId, days })
+      });
+      if (res.ok) {
+        await fetchInterventions();
+      }
+    } catch (e) {
+      console.error("Error snoozing intervention:", e);
+    } finally {
+      setActionInProgressId(null);
+    }
+  };
+
+  const handleCompleteIntervention = async () => {
+    if (!token || !completingIntervention) return;
+    setActionInProgressId(completingIntervention.intervention_id);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/interventions/complete`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          intervention_id: completingIntervention.intervention_id,
+          rating: feedbackRating,
+          notes: feedbackNotes,
+          helpful: feedbackHelpful
+        })
+      });
+      if (res.ok) {
+        setCompletingIntervention(null);
+        setFeedbackNotes('');
+        await fetchInterventions();
+      }
+    } catch (e) {
+      console.error("Error completing intervention:", e);
+    } finally {
+      setActionInProgressId(null);
+    }
+  };
+
   const handleRefresh = async () => {
     setIsRefreshing(true);
     await fetchData();
     await fetchModelIntelligence();
     await fetchBehavioralProfile();
+    await fetchInterventions();
     setIsRefreshing(false);
   };
 
@@ -1882,6 +2078,16 @@ export default function App() {
               Behavioral Profile
             </button>
             <button 
+              className={`tab-btn ${activeTab === 'interventions' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTab('interventions');
+                fetchInterventions();
+              }}
+            >
+              <Target size={16} />
+              Habits & Interventions
+            </button>
+            <button 
               className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
               onClick={() => setActiveTab('history')}
             >
@@ -2357,6 +2563,58 @@ export default function App() {
                       {insights.is_synthetic_demonstration ? 'Demonstration Notice:' : 'Verified Data:'}
                     </span>
                     <span>{insights.provenance_notice}</span>
+                  </div>
+                )}
+
+                {/* Evidence-Driven Intervention Spotlight (Prompt 2.7) */}
+                {(userInterventions.filter(i => i.status === 'accepted' || i.status === 'started').length > 0 || personalizedRecs.length > 0) && (
+                  <div style={{ 
+                    marginBottom: '1rem', 
+                    padding: '0.85rem 1rem', 
+                    borderRadius: '8px', 
+                    border: '1px solid rgba(59, 130, 246, 0.3)', 
+                    background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, rgba(139, 92, 246, 0.05) 100%)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: '0.75rem'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <div style={{ 
+                        padding: '0.5rem', 
+                        borderRadius: '6px', 
+                        backgroundColor: 'rgba(59, 130, 246, 0.2)', 
+                        color: 'var(--accent-primary)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}>
+                        <Target size={20} />
+                      </div>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-primary)' }}>
+                          {userInterventions.filter(i => i.status === 'accepted' || i.status === 'started').length > 0
+                            ? `Active Trial: ${userInterventions.find(i => i.status === 'accepted' || i.status === 'started')?.action}`
+                            : `${personalizedRecs.length} Evidence-Driven Intervention(s) Available`}
+                        </div>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                          {userInterventions.filter(i => i.status === 'accepted' || i.status === 'started').length > 0
+                            ? 'Currently tracking before-and-after departure metrics in your active habit trial.'
+                            : 'Personalized to your diagnosed departure bottlenecks, underestimation biases, and distraction triggers.'}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      className="tab-btn active"
+                      onClick={() => {
+                        setActiveTab('interventions');
+                        fetchInterventions();
+                      }}
+                      style={{ fontSize: '0.8rem', padding: '0.4rem 0.85rem' }}
+                    >
+                      View Habits & Interventions →
+                    </button>
                   </div>
                 )}
                 
@@ -5302,6 +5560,492 @@ export default function App() {
                   </table>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* TAB: HABITS & INTERVENTIONS (Prompt 2.7) */}
+          {activeTab === 'interventions' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+              {/* Header Card */}
+              <div className="card">
+                <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
+                  <div>
+                    <h3 className="card-title">
+                      <Target size={20} style={{ color: 'var(--accent-primary)' }} />
+                      Adaptive Behavioral Habits & Interventions
+                    </h3>
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                      Evidence-driven behavioral adjustments linked to your empirical departure logs. Track trials, measure before-and-after impact, and refine habit recommendations.
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <button 
+                      className="tab-btn" 
+                      onClick={() => fetchInterventions()} 
+                      disabled={interventionsLoading}
+                      style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                    >
+                      <RefreshCw size={14} className={interventionsLoading ? 'spin' : ''} />
+                      Refresh
+                    </button>
+                  </div>
+                </div>
+
+                {/* Filter Controls */}
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem', flexWrap: 'wrap' }}>
+                  <button 
+                    className={`tab-btn ${interventionTabFilter === 'all' ? 'active' : ''}`}
+                    onClick={() => setInterventionTabFilter('all')}
+                    style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
+                  >
+                    All ({userInterventions.length + personalizedRecs.length})
+                  </button>
+                  <button 
+                    className={`tab-btn ${interventionTabFilter === 'suggested' ? 'active' : ''}`}
+                    onClick={() => setInterventionTabFilter('suggested')}
+                    style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
+                  >
+                    Eligible Suggestions ({personalizedRecs.length})
+                  </button>
+                  <button 
+                    className={`tab-btn ${interventionTabFilter === 'active' ? 'active' : ''}`}
+                    onClick={() => setInterventionTabFilter('active')}
+                    style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
+                  >
+                    Active In Progress ({userInterventions.filter(i => i.status === 'accepted' || i.status === 'started').length})
+                  </button>
+                  <button 
+                    className={`tab-btn ${interventionTabFilter === 'completed' ? 'active' : ''}`}
+                    onClick={() => setInterventionTabFilter('completed')}
+                    style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
+                  >
+                    Completed & Measured ({userInterventions.filter(i => i.status === 'completed').length})
+                  </button>
+                </div>
+              </div>
+
+              {/* SECTION 1: ACTIVE IN-PROGRESS TRIALS */}
+              {(interventionTabFilter === 'all' || interventionTabFilter === 'active') && (
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                    <Activity size={18} style={{ color: 'var(--accent-primary)' }} />
+                    <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Active Habit Trials in Progress</h4>
+                  </div>
+                  
+                  {userInterventions.filter(i => i.status === 'accepted' || i.status === 'started').length > 0 ? (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '1rem' }}>
+                      {userInterventions
+                        .filter(i => i.status === 'accepted' || i.status === 'started')
+                        .map((item) => (
+                          <div key={item.intervention_id} className="intervention-card active-card">
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                              <span className="intervention-category-pill">{item.category}</span>
+                              <span className="status-badge" style={{ backgroundColor: 'rgba(59, 130, 246, 0.15)', color: 'var(--accent-primary)', fontSize: '0.72rem' }}>
+                                Active Trial
+                              </span>
+                            </div>
+
+                            <h4 style={{ margin: '0.25rem 0 0.5rem 0', fontSize: '1rem', fontWeight: 600 }}>{item.action}</h4>
+                            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.75rem', lineHeight: 1.4 }}>
+                              {item.description}
+                            </p>
+
+                            {/* Baseline Snapshot */}
+                            {item.baseline_metrics && (
+                              <div style={{ fontSize: '0.78rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem', borderRadius: '4px', marginBottom: '0.75rem' }}>
+                                <div style={{ color: 'var(--text-muted)', marginBottom: '0.2rem', fontWeight: 600 }}>Baseline Metric Snapshot:</div>
+                                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', fontFamily: 'var(--font-mono)' }}>
+                                  <span>Delay: {item.baseline_metrics.avg_departure_delay_min?.toFixed(1) ?? '--'}m</span>
+                                  <span>Late Rate: {Math.round((item.baseline_metrics.lateness_rate ?? 0) * 100)}%</span>
+                                  <span>Prep Bias: {item.baseline_metrics.avg_prep_bias_min?.toFixed(1) ?? '--'}m</span>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Implementation Steps */}
+                            <div className="intervention-steps-box">
+                              <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.25rem' }}>Implementation Steps:</div>
+                              <ol className="intervention-steps-list">
+                                {item.implementation_steps.map((st, idx) => (
+                                  <li key={idx}>{st}</li>
+                                ))}
+                              </ol>
+                            </div>
+
+                            {/* Controls */}
+                            <div className="intervention-controls">
+                              <button 
+                                className="tab-btn active"
+                                onClick={() => setCompletingIntervention(item)}
+                                disabled={actionInProgressId === item.intervention_id}
+                                style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem' }}
+                              >
+                                <CheckCircle2 size={14} />
+                                Complete & Review
+                              </button>
+                              <button 
+                                className="tab-btn"
+                                onClick={() => handleDismissIntervention(item.intervention_id)}
+                                disabled={actionInProgressId === item.intervention_id}
+                                style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem', color: 'var(--accent-danger)' }}
+                              >
+                                Dismiss
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  ) : (
+                    <div className="card" style={{ padding: '1.25rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                      No active habit trials right now. Review the eligible suggestions below to start an evidence-based trial!
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* SECTION 2: ELIGIBLE SUGGESTIONS */}
+              {(interventionTabFilter === 'all' || interventionTabFilter === 'suggested') && (
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <Sparkles size={18} style={{ color: 'var(--accent-warning)' }} />
+                      <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Personalized Recommendations (Ranked by Evidence & Impact)</h4>
+                    </div>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                      Strictly conditioned on diagnosed behavioral bottlenecks
+                    </span>
+                  </div>
+
+                  {personalizedRecs.length > 0 ? (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '1rem' }}>
+                      {personalizedRecs.map((rec, idx) => (
+                        <div key={rec.recommendation_id || idx} className="intervention-card">
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)' }}>#{idx + 1}</span>
+                              <span className="intervention-category-pill">{rec.category}</span>
+                            </div>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--accent-success)', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
+                              Est. {rec.expected_delay_reduction_min ? `-${rec.expected_delay_reduction_min}m delay` : 'delay reduction'}
+                            </span>
+                          </div>
+
+                          <h4 style={{ margin: '0.25rem 0 0.5rem 0', fontSize: '1rem', fontWeight: 600 }}>{rec.action}</h4>
+                          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.75rem', lineHeight: 1.4 }}>
+                            {rec.description}
+                          </p>
+
+                          {/* Supporting Evidence Diagnosis */}
+                          {rec.supporting_evidence && (
+                            <div className="intervention-evidence-box">
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontWeight: 600, color: 'var(--accent-warning)', marginBottom: '0.25rem' }}>
+                                <AlertTriangle size={13} />
+                                Diagnosed Behavioral Bottleneck:
+                              </div>
+                              <div style={{ color: 'var(--text-primary)', marginBottom: '0.2rem' }}>
+                                {rec.supporting_evidence.statement || rec.behavioral_problem}
+                              </div>
+                              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                Based on {rec.supporting_evidence.sample_count} departure logs (frequency: {Math.round((rec.supporting_evidence.problem_frequency || 0) * 100)}%)
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Collapsible Steps */}
+                          <div style={{ marginTop: '0.5rem', marginBottom: '0.75rem' }}>
+                            <button 
+                              className="tab-btn" 
+                              style={{ width: '100%', fontSize: '0.75rem', padding: '0.3rem 0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                              onClick={() => setExpandedInterventionId(expandedInterventionId === rec.recommendation_id ? null : rec.recommendation_id)}
+                            >
+                              <span>View Actionable Steps ({rec.implementation_steps?.length || 0})</span>
+                              {expandedInterventionId === rec.recommendation_id ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                            </button>
+                            {expandedInterventionId === rec.recommendation_id && (
+                              <div className="intervention-steps-box" style={{ marginTop: '0.4rem' }}>
+                                <ol className="intervention-steps-list">
+                                  {rec.implementation_steps?.map((step, sIdx) => (
+                                    <li key={sIdx}>{step}</li>
+                                  ))}
+                                </ol>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Actions */}
+                          <div className="intervention-controls">
+                            <button 
+                              className="tab-btn active"
+                              onClick={() => handleAcceptIntervention(rec.recommendation_id)}
+                              disabled={actionInProgressId === rec.recommendation_id}
+                              style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem' }}
+                            >
+                              <Check size={14} />
+                              Start Habit Trial
+                            </button>
+                            <button 
+                              className="tab-btn"
+                              onClick={() => handleSnoozeIntervention(rec.recommendation_id, 7)}
+                              disabled={actionInProgressId === rec.recommendation_id}
+                              style={{ fontSize: '0.8rem', padding: '0.4rem 0.6rem' }}
+                              title="Hide for 7 days"
+                            >
+                              Snooze 7d
+                            </button>
+                            <button 
+                              className="tab-btn"
+                              onClick={() => handleDismissIntervention(rec.recommendation_id)}
+                              disabled={actionInProgressId === rec.recommendation_id}
+                              style={{ fontSize: '0.8rem', padding: '0.4rem 0.6rem', color: 'var(--text-muted)' }}
+                              title="Dismiss suggestion"
+                            >
+                              Dismiss
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="card" style={{ padding: '1.25rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                      No active suggestions right now. As you record more genuine morning departures, new personalized recommendations will appear!
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* SECTION 3: COMPLETED & MEASURED OUTCOMES */}
+              {(interventionTabFilter === 'all' || interventionTabFilter === 'completed') && (
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                    <ShieldCheck size={18} style={{ color: 'var(--accent-success)' }} />
+                    <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Completed Trials & Measured Effectiveness</h4>
+                  </div>
+
+                  {userInterventions.filter(i => i.status === 'completed').length > 0 ? (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: '1rem' }}>
+                      {userInterventions
+                        .filter(i => i.status === 'completed')
+                        .map((item) => (
+                          <div key={item.intervention_id} className="intervention-card completed-card">
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                              <span className="intervention-category-pill">{item.category}</span>
+                              <span 
+                                className="status-badge" 
+                                style={{ 
+                                  backgroundColor: item.measured_outcome?.outcome_label === 'success' ? 'rgba(16, 185, 129, 0.15)' :
+                                                   item.measured_outcome?.outcome_label === 'partial_success' ? 'rgba(6, 182, 212, 0.15)' :
+                                                   item.measured_outcome?.outcome_label === 'neutral' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                                  color: item.measured_outcome?.outcome_label === 'success' ? 'var(--accent-success)' :
+                                         item.measured_outcome?.outcome_label === 'partial_success' ? '#06b6d4' :
+                                         item.measured_outcome?.outcome_label === 'neutral' ? 'var(--accent-warning)' : 'var(--accent-danger)',
+                                  fontSize: '0.72rem' 
+                                }}
+                              >
+                                {item.measured_outcome?.outcome_label ? item.measured_outcome.outcome_label.toUpperCase().replace('_', ' ') : 'COMPLETED'}
+                              </span>
+                            </div>
+
+                            <h4 style={{ margin: '0.25rem 0 0.5rem 0', fontSize: '1rem', fontWeight: 600 }}>{item.action}</h4>
+                            
+                            {/* Measured Deltas */}
+                            {item.measured_outcome && (
+                              <div style={{ margin: '0.5rem 0 0.75rem 0' }}>
+                                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>Empirical Before/After Impact:</div>
+                                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                  {item.measured_outcome.delay_delta_min !== undefined && (
+                                    <span className={`measured-delta-chip ${item.measured_outcome.delay_delta_min < 0 ? 'positive' : item.measured_outcome.delay_delta_min > 0 ? 'negative' : 'neutral'}`}>
+                                      Delay: {item.measured_outcome.delay_delta_min > 0 ? `+${item.measured_outcome.delay_delta_min.toFixed(1)}m` : `${item.measured_outcome.delay_delta_min.toFixed(1)}m`}
+                                    </span>
+                                  )}
+                                  {item.measured_outcome.lateness_rate_delta !== undefined && (
+                                    <span className={`measured-delta-chip ${item.measured_outcome.lateness_rate_delta < 0 ? 'positive' : item.measured_outcome.lateness_rate_delta > 0 ? 'negative' : 'neutral'}`}>
+                                      Late Rate: {item.measured_outcome.lateness_rate_delta > 0 ? `+${Math.round(item.measured_outcome.lateness_rate_delta * 100)}%` : `${Math.round(item.measured_outcome.lateness_rate_delta * 100)}%`}
+                                    </span>
+                                  )}
+                                  {item.measured_outcome.prep_bias_delta_min !== undefined && (
+                                    <span className={`measured-delta-chip ${item.measured_outcome.prep_bias_delta_min < 0 ? 'positive' : 'neutral'}`}>
+                                      Prep Bias: {item.measured_outcome.prep_bias_delta_min > 0 ? `+${item.measured_outcome.prep_bias_delta_min.toFixed(1)}m` : `${item.measured_outcome.prep_bias_delta_min.toFixed(1)}m`}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* User Feedback & Rating */}
+                            {(item.user_rating || item.user_feedback_notes) && (
+                              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.75rem', borderRadius: '4px', margin: '0.5rem 0', fontSize: '0.78rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
+                                  <span style={{ color: 'var(--text-muted)' }}>User Rating:</span>
+                                  <div style={{ display: 'flex', color: 'var(--accent-warning)' }}>
+                                    {[1, 2, 3, 4, 5].map(st => (
+                                      <Star key={st} size={12} fill={st <= (item.user_rating || 0) ? 'currentColor' : 'none'} />
+                                    ))}
+                                  </div>
+                                  {item.user_helpful !== undefined && (
+                                    <span style={{ marginLeft: 'auto', color: item.user_helpful ? 'var(--accent-success)' : 'var(--text-muted)' }}>
+                                      {item.user_helpful ? '👍 Helpful' : '👎 Not helpful'}
+                                    </span>
+                                  )}
+                                </div>
+                                {item.user_feedback_notes && (
+                                  <div style={{ color: 'var(--text-secondary)', fontStyle: 'italic', marginTop: '0.25rem' }}>
+                                    "{item.user_feedback_notes}"
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Confounding Factors */}
+                            {item.confounding_factors && item.confounding_factors.length > 0 && (
+                              <div style={{ marginTop: '0.5rem' }}>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '0.2rem' }}>Potential Confounding Variables:</div>
+                                <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                  {item.confounding_factors.map((cf, cIdx) => (
+                                    <span key={cIdx} className="confounder-tag">{cf}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Causation Disclaimer */}
+                            {item.causation_disclaimer && (
+                              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.5rem', fontStyle: 'italic' }}>
+                                ℹ️ {item.causation_disclaimer}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                    </div>
+                  ) : (
+                    <div className="card" style={{ padding: '1.25rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                      No completed trials yet. Complete an active habit trial to measure its empirical effect!
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* COMPLETION FEEDBACK MODAL */}
+              {completingIntervention && (
+                <div style={{
+                  position: 'fixed',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  zIndex: 1000,
+                  padding: '1rem'
+                }}>
+                  <div className="card" style={{ maxWidth: '520px', width: '100%', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)' }}>
+                    <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <h3 className="card-title">
+                        <CheckCircle2 size={18} style={{ color: 'var(--accent-success)' }} />
+                        Complete Habit Trial & Review
+                      </h3>
+                      <button 
+                        className="tab-btn" 
+                        onClick={() => setCompletingIntervention(null)}
+                        style={{ padding: '0.2rem 0.5rem', fontSize: '0.8rem' }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: '0.95rem', marginBottom: '0.25rem' }}>{completingIntervention.action}</div>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{completingIntervention.description}</div>
+                      </div>
+
+                      {/* 1-5 Star Rating */}
+                      <div>
+                        <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '0.4rem' }}>
+                          How would you rate the practicality and impact of this habit?
+                        </label>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          {[1, 2, 3, 4, 5].map((star) => (
+                            <button
+                              key={star}
+                              type="button"
+                              className={`star-rating-btn ${feedbackRating >= star ? 'selected' : ''}`}
+                              onClick={() => setFeedbackRating(star)}
+                            >
+                              ★
+                            </button>
+                          ))}
+                          <span style={{ fontSize: '0.85rem', color: 'var(--accent-warning)', alignSelf: 'center', marginLeft: '0.5rem', fontWeight: 600 }}>
+                            {feedbackRating} / 5 Stars
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Helpful Toggle */}
+                      <div>
+                        <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '0.4rem' }}>
+                          Did this intervention help you leave on time?
+                        </label>
+                        <div style={{ display: 'flex', gap: '0.75rem' }}>
+                          <button
+                            type="button"
+                            className={`tab-btn ${feedbackHelpful ? 'active' : ''}`}
+                            onClick={() => setFeedbackHelpful(true)}
+                            style={{ flex: 1, padding: '0.5rem', fontSize: '0.85rem' }}
+                          >
+                            <ThumbsUp size={14} /> Yes, it helped
+                          </button>
+                          <button
+                            type="button"
+                            className={`tab-btn ${!feedbackHelpful ? 'active' : ''}`}
+                            onClick={() => setFeedbackHelpful(false)}
+                            style={{ flex: 1, padding: '0.5rem', fontSize: '0.85rem' }}
+                          >
+                            <ThumbsDown size={14} /> No, not really
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Qualitative Notes */}
+                      <div>
+                        <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '0.4rem' }}>
+                          Qualitative Notes / Reflection (optional)
+                        </label>
+                        <textarea
+                          className="form-input"
+                          rows={3}
+                          placeholder="e.g. Preparing my bag the night before saved me 8 minutes looking for my keys and notes..."
+                          value={feedbackNotes}
+                          onChange={(e) => setFeedbackNotes(e.target.value)}
+                          style={{ resize: 'vertical' }}
+                        />
+                      </div>
+
+                      {/* Action buttons */}
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
+                        <button
+                          type="button"
+                          className="tab-btn"
+                          onClick={() => setCompletingIntervention(null)}
+                          disabled={actionInProgressId === completingIntervention.intervention_id}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="tab-btn active"
+                          onClick={handleCompleteIntervention}
+                          disabled={actionInProgressId === completingIntervention.intervention_id}
+                          style={{ backgroundColor: 'var(--accent-success)', borderColor: 'var(--accent-success)' }}
+                        >
+                          {actionInProgressId === completingIntervention.intervention_id ? 'Recording Outcome...' : 'Submit & Measure Impact'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

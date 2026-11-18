@@ -167,6 +167,25 @@ class GlobalTrainRequestSchema(BaseModel):
     min_cohort_users: Optional[int] = 2
     min_cohort_samples: Optional[int] = 10
 
+class InterventionActionSchema(BaseModel):
+    intervention_id: str
+
+class InterventionSnoozeSchema(BaseModel):
+    intervention_id: str
+    days: Optional[int] = 7
+
+class InterventionCompleteSchema(BaseModel):
+    intervention_id: str
+    rating: Optional[int] = None
+    notes: Optional[str] = None
+    helpful: Optional[bool] = None
+
+class InterventionFeedbackSchema(BaseModel):
+    intervention_id: str
+    rating: int
+    notes: Optional[str] = None
+    helpful: Optional[bool] = None
+
 # Authentication Endpoints
 @app.post("/api/auth/register", response_model=AuthTokenSchema)
 def register_user(user_in: UserRegisterSchema, db: Session = Depends(get_db)):
@@ -737,6 +756,110 @@ def get_feature_importance_endpoint(
 ):
     """Retrieve global feature importance ranking for the user's active model."""
     return models.get_user_feature_importance(db, current_user.id)
+
+
+# Adaptive Personalized Recommendations & Interventions (Prompt 2.7)
+@app.get("/api/recommendations/personalized")
+def get_personalized_recommendations_endpoint(
+    limit: int = 3,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Retrieve prioritized, evidence-driven behavioral recommendations for current user."""
+    return models.get_user_recommendations(db, current_user.id, limit=limit)
+
+
+@app.get("/api/interventions")
+def get_user_interventions_endpoint(
+    status: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Fetch tracked behavioral interventions for current user with optional status filter."""
+    return models.get_user_interventions(db, current_user.id, status=status)
+
+
+@app.post("/api/interventions/accept")
+def accept_intervention_endpoint(
+    req: InterventionActionSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Accept an intervention; snapshots baseline metrics and starts tracking."""
+    try:
+        return models.accept_user_intervention(db, current_user.id, req.intervention_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/interventions/dismiss")
+def dismiss_intervention_endpoint(
+    req: InterventionActionSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Dismiss a recommendation with fatigue cooling."""
+    try:
+        return models.dismiss_user_intervention(db, current_user.id, req.intervention_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/interventions/snooze")
+def snooze_intervention_endpoint(
+    req: InterventionSnoozeSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Snooze a recommendation for specified days."""
+    try:
+        days = req.days if req.days is not None else 7
+        return models.snooze_user_intervention(db, current_user.id, req.intervention_id, days=days)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/interventions/complete")
+def complete_intervention_endpoint(
+    req: InterventionCompleteSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Complete an intervention, evaluate empirical outcome changes, and record feedback."""
+    try:
+        return models.complete_user_intervention(
+            db, current_user.id, req.intervention_id, rating=req.rating, notes=req.notes, helpful=req.helpful
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/interventions/feedback")
+def submit_intervention_feedback_endpoint(
+    req: InterventionFeedbackSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Submit user rating and qualitative feedback for an intervention."""
+    try:
+        return models.submit_user_intervention_feedback(
+            db, current_user.id, req.intervention_id, rating=req.rating, notes=req.notes, helpful=req.helpful
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/interventions/{intervention_id}/effectiveness")
+def get_intervention_effectiveness_endpoint(
+    intervention_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Retrieve detailed before-and-after outcome analysis and confounding factors."""
+    try:
+        return models.get_user_intervention_effectiveness(db, current_user.id, intervention_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.post("/api/checkout")

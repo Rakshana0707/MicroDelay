@@ -210,6 +210,41 @@ class PredictionExplanationRecord(Base):
     user = relationship("User", backref="prediction_explanations")
 
 
+class UserInterventionRecord(Base):
+    __tablename__ = "user_interventions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    intervention_id = Column(String, unique=True, index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    recommendation_id = Column(String, index=True, nullable=False)
+    category = Column(String, nullable=False)  # "preparation", "distraction", "timing", "routine_consistency"
+    action = Column(String, nullable=False)
+    description = Column(String, nullable=False)
+    implementation_steps = Column(Text, nullable=False)  # JSON list of steps
+    behavioral_problem = Column(String, nullable=False)
+    supporting_evidence = Column(Text, nullable=False)  # JSON dict
+    status = Column(String, default="suggested", index=True, nullable=False)  # "suggested", "accepted", "started", "completed", "dismissed", "snoozed", "expired"
+    expected_delay_reduction_min = Column(Float, default=0.0)
+    expected_outcome = Column(Text, nullable=False)  # JSON dict
+    measured_outcome = Column(Text, nullable=True)  # JSON dict
+    baseline_metrics = Column(Text, nullable=True)  # JSON dict
+    post_metrics = Column(Text, nullable=True)  # JSON dict
+    confounding_factors = Column(Text, nullable=True)  # JSON list
+    causation_disclaimer = Column(String, nullable=False)
+    generated_at = Column(String, nullable=False)
+    accepted_at = Column(String, nullable=True)
+    started_at = Column(String, nullable=True)
+    completed_at = Column(String, nullable=True)
+    dismissed_at = Column(String, nullable=True)
+    snoozed_until = Column(String, nullable=True)
+    user_rating = Column(Integer, nullable=True)  # 1 to 5
+    user_feedback_notes = Column(Text, nullable=True)
+    user_helpful = Column(Boolean, nullable=True)
+    completion_status = Column(String, nullable=True)  # "success", "neutral", "unsuccessful", "abandoned"
+
+    user = relationship("User", backref="interventions")
+
+
 def migrate_db(db_engine=None):
     """Safely migrate SQLite database schema to include provenance fields and backfill legacy records."""
     target_engine = db_engine or engine
@@ -338,6 +373,40 @@ def migrate_db(db_engine=None):
                 causation_disclaimer VARCHAR NOT NULL,
                 feature_audit_values TEXT NOT NULL,
                 explanation_timestamp VARCHAR NOT NULL
+            )
+        """))
+
+        # Create user_interventions table if not present (Prompt 2.7)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS user_interventions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                intervention_id VARCHAR UNIQUE NOT NULL,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                recommendation_id VARCHAR NOT NULL,
+                category VARCHAR NOT NULL,
+                action VARCHAR NOT NULL,
+                description TEXT NOT NULL,
+                implementation_steps TEXT NOT NULL,
+                behavioral_problem VARCHAR NOT NULL,
+                supporting_evidence TEXT NOT NULL,
+                status VARCHAR NOT NULL DEFAULT 'suggested',
+                expected_delay_reduction_min FLOAT DEFAULT 0.0,
+                expected_outcome TEXT NOT NULL,
+                measured_outcome TEXT,
+                baseline_metrics TEXT,
+                post_metrics TEXT,
+                confounding_factors TEXT,
+                causation_disclaimer VARCHAR NOT NULL,
+                generated_at VARCHAR NOT NULL,
+                accepted_at VARCHAR,
+                started_at VARCHAR,
+                completed_at VARCHAR,
+                dismissed_at VARCHAR,
+                snoozed_until VARCHAR,
+                user_rating INTEGER,
+                user_feedback_notes TEXT,
+                user_helpful BOOLEAN,
+                completion_status VARCHAR
             )
         """))
 

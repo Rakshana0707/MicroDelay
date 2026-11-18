@@ -141,6 +141,28 @@ except ModuleNotFoundError:
         ExplainabilityService,
         CAUSATION_DISCLAIMER
     )
+try:
+    from ml.recommendations import (
+        CatalogItem,
+        RECOMMENDATION_CATALOG,
+        EligibleIntervention,
+        RecommendationEligibilityEvaluator,
+        AdaptivePrioritizer,
+        EffectivenessMeasurementService,
+        InterventionService,
+        INTERVENTION_CAUSATION_DISCLAIMER
+    )
+except ModuleNotFoundError:
+    from backend.ml.recommendations import (
+        CatalogItem,
+        RECOMMENDATION_CATALOG,
+        EligibleIntervention,
+        RecommendationEligibilityEvaluator,
+        AdaptivePrioritizer,
+        EffectivenessMeasurementService,
+        InterventionService,
+        INTERVENTION_CAUSATION_DISCLAIMER
+    )
 
 __all__ = [
     "ValidationConfig",
@@ -206,5 +228,13 @@ __all__ = [
     "LocalPredictionExplainer",
     "GlobalFeatureImportanceCalculator",
     "ExplainabilityService",
-    "CAUSATION_DISCLAIMER"
+    "CAUSATION_DISCLAIMER",
+    "CatalogItem",
+    "RECOMMENDATION_CATALOG",
+    "EligibleIntervention",
+    "RecommendationEligibilityEvaluator",
+    "AdaptivePrioritizer",
+    "EffectivenessMeasurementService",
+    "InterventionService",
+    "INTERVENTION_CAUSATION_DISCLAIMER"
 ]

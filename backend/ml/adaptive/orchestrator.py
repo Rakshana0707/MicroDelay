@@ -305,7 +305,8 @@ class AdaptiveIntelligenceOrchestrator:
                 context=context,
                 predicted_delay_min=predicted_delay,
                 contributing_factors=contributing_factors,
-                profile_data=profile_data
+                profile_data=profile_data,
+                db=db
             )
             component_status["recommendations"] = "success"
         except Exception as e:

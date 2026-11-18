@@ -1036,6 +1036,106 @@ def get_user_prediction_explanation(db: Session, user_id: int, prediction_id: st
     return ExplainabilityService.get_explanation_by_id(db, user_id, prediction_id)
 
 
+# Adaptive Personalized Recommendation Engine (Prompt 2.7)
+def get_user_recommendations(db: Session, user_id: int, context: Optional[Any] = None, limit: int = 3) -> list:
+    """Generate and rank personalized eligible recommendations for user."""
+    try:
+        from ml.recommendations import InterventionService
+    except ModuleNotFoundError:
+        from backend.ml.recommendations import InterventionService
+
+    return InterventionService.get_personalized_recommendations(db, user_id, context=context, limit=limit)
+
+
+def get_user_interventions(db: Session, user_id: int, status: Optional[str] = None) -> list:
+    """Retrieve user's tracked interventions history."""
+    try:
+        from ml.recommendations import InterventionService
+    except ModuleNotFoundError:
+        from backend.ml.recommendations import InterventionService
+
+    return InterventionService.get_user_interventions(db, user_id, status=status)
+
+
+def accept_user_intervention(db: Session, user_id: int, intervention_id: str) -> dict:
+    """Accept an intervention and capture baseline metrics."""
+    try:
+        from ml.recommendations import InterventionService
+    except ModuleNotFoundError:
+        from backend.ml.recommendations import InterventionService
+
+    return InterventionService.accept_intervention(db, user_id, intervention_id)
+
+
+def dismiss_user_intervention(db: Session, user_id: int, intervention_id: str) -> dict:
+    """Dismiss a recommendation with fatigue cooling."""
+    try:
+        from ml.recommendations import InterventionService
+    except ModuleNotFoundError:
+        from backend.ml.recommendations import InterventionService
+
+    return InterventionService.dismiss_intervention(db, user_id, intervention_id)
+
+
+def snooze_user_intervention(db: Session, user_id: int, intervention_id: str, days: int = 7) -> dict:
+    """Snooze a recommendation for specified days."""
+    try:
+        from ml.recommendations import InterventionService
+    except ModuleNotFoundError:
+        from backend.ml.recommendations import InterventionService
+
+    return InterventionService.snooze_intervention(db, user_id, intervention_id, days=days)
+
+
+def complete_user_intervention(
+    db: Session,
+    user_id: int,
+    intervention_id: str,
+    rating: Optional[int] = None,
+    notes: Optional[str] = None,
+    helpful: Optional[bool] = None
+) -> dict:
+    """Mark an intervention completed and evaluate empirical outcome change."""
+    try:
+        from ml.recommendations import InterventionService
+    except ModuleNotFoundError:
+        from backend.ml.recommendations import InterventionService
+
+    return InterventionService.complete_intervention(
+        db, user_id, intervention_id, rating=rating, notes=notes, helpful=helpful
+    )
+
+
+def submit_user_intervention_feedback(
+    db: Session,
+    user_id: int,
+    intervention_id: str,
+    rating: int,
+    notes: Optional[str] = None,
+    helpful: Optional[bool] = None
+) -> dict:
+    """Record user feedback and rating for an intervention."""
+    try:
+        from ml.recommendations import InterventionService
+    except ModuleNotFoundError:
+        from backend.ml.recommendations import InterventionService
+
+    return InterventionService.submit_feedback(
+        db, user_id, intervention_id, rating=rating, notes=notes, helpful=helpful
+    )
+
+
+def get_user_intervention_effectiveness(db: Session, user_id: int, intervention_id: str) -> dict:
+    """Fetch empirical effectiveness evaluation and confounding factors."""
+    try:
+        from ml.recommendations import InterventionService
+    except ModuleNotFoundError:
+        from backend.ml.recommendations import InterventionService
+
+    return InterventionService.get_intervention_effectiveness(db, user_id, intervention_id)
+
+
+
 
 
 
