@@ -418,3 +418,59 @@ Key architectural capabilities:
    - Real-time connection statuses, account references, last synced timestamps, and independent sync/disconnect actions.
    - Unified upcoming schedule with provider pills (`Google` / `Outlook`), missing location alerts, routine association selectors, and one-click departure optimization.
 
+---
+
+## 14. Travel & Route Intelligence Engine (Prompt 3.4)
+
+### 14.1 Overview & Architecture
+Prompt 3.4 establishes MicroDelay's context-aware **Travel & Route Intelligence Engine**, transitioning departure planning from static user estimates to dynamic, multi-modal, traffic-aware, and behaviorally personalized travel calculations.
+
+Key architectural capabilities:
+1. **Location Management System**:
+   - User-saved frequent locations (`Home`, `College / Workplace`, `Frequent`, `Custom`) stored in `user_saved_locations`.
+   - Explicit user authorization only: **no continuous background GPS tracking**.
+   - Support for designating a primary location (e.g. Home) used as the automatic origin anchor during departure planning.
+   - Strict user data isolation preventing cross-account data leaks.
+2. **Geocoding & Persistent Caching**:
+   - Address validation (`validate_address`) and geographic coordinate boundary validation (`validate_coordinates` for latitude $[-90, 90]$ and longitude $[-180, 180]$).
+   - `GeocodingManager` orchestrates lookup with multi-tier caching: in-memory fast cache and persistent database cache (`geocode_cache` table) with SHA-256 query hashing and configurable TTL (default 30 days).
+   - Provider abstraction supporting OpenStreetMap Nominatim, Google Maps Geocoding API, and deterministic mock geocoding fallback for offline and testing environments.
+   - Reverse geocoding support translating coordinates to formatted addresses.
+3. **Route Provider Abstraction & Multi-Modal Routing**:
+   - `TravelIntegrationBase` defines standardized data contracts (`RouteOption`, `TravelEstimate`) returning origin, destination, travel mode, base duration, traffic-aware duration, distance in km, route identifier/summary, retrieval timestamp, provider name, and warnings.
+   - Multi-modal support across 4 transport modes:
+     - `driving` (traffic-aware duration via live conditions)
+     - `transit` (public transit travel times)
+     - `bicycling` (cycling routes and speed calibration)
+     - `walking` (pedestrian routes and realistic walking pace)
+   - Google Maps Routes & Directions API adapter (`GoogleRoutesIntegration`) supporting multiple route alternatives, traffic-in-duration, and overview polyline extraction.
+   - Deterministic `MockTravelIntegration` with multi-route generation, custom route duration overrides, and mode duration scaling.
+4. **Route Selection, Comparison & User Preferences**:
+   - Side-by-side mode comparison (`compare_modes` endpoint) comparing driving, transit, bicycling, and walking in a single call.
+   - User-saved preferred corridors (`user_saved_routes`) storing preferred routes, distance, and historical notes separately from journey observation logs.
+   - Travel preferences (`user_travel_preferences`) storing default travel mode, toll avoidance, highway avoidance, and departure buffer multipliers.
+5. **Historical Travel Data Preservation**:
+   - For every completed departure, MicroDelay records `estimated_travel_duration_min`, `actual_travel_duration_min`, `selected_route`, `travel_mode`, `travel_estimate_retrieved_at`, and `data_source` in `departure_logs`.
+   - **Strict immutability invariant**: The original provider or planned travel estimate is **NEVER overwritten** by actual travel duration, ensuring unbiased historical machine learning evaluation.
+6. **Personalized Travel Estimation (Phase 2 ML Integration)**:
+   - `PersonalizedTravelEngine` bridges Phase 2 behavioral intelligence with external routing estimates.
+   - Calculates personal travel bias ratio:
+     $$\Delta_{\text{bias}} = \frac{\sum D_{\text{actual}}}{\sum D_{\text{estimated}}}$$
+   - Evaluates day-specific commuting factors (e.g. Monday morning congestion) and time-of-day rush-hour peak windows ($07:30 - 09:30$ and $16:30 - 18:30$).
+   - Applies empirical Bayesian shrinkage: for sparse user journey observations ($N < 5$), estimates remain anchored tightly to provider routing; as observations accumulate, personalized behavioral weights smoothly scale up while bounded within sane multiplier clamps ($[0.65, 1.85]$).
+7. **Frontend Travel Intelligence Section**:
+   - `TravelIntelligenceSection` component featuring:
+     - Reliability & bias analytics summary banner (total journeys, on-time percentage, mean bias minutes, bias ratio, behavioral insights).
+     - Saved locations management cards (Home, Work, Custom) with primary toggle and geocoded coordinates.
+     - Interactive route explorer with origin/destination inputs, mode selector, and alternative cards.
+     - Side-by-side multi-modal comparison matrix.
+     - Preferred route corridors list.
+     - User travel preferences and buffer multiplier slider.
+
+### 14.2 Database Schema Additions
+- **`user_saved_locations`**: `id`, `user_id`, `name`, `category`, `address`, `latitude`, `longitude`, `is_primary`, `created_at`, `updated_at`.
+- **`user_saved_routes`**: `id`, `user_id`, `name`, `origin_address`, `origin_lat`, `origin_lng`, `destination_address`, `destination_lat`, `destination_lng`, `travel_mode`, `preferred_route_identifier`, `distance_km`, `estimated_duration_min`, `notes`, `created_at`, `updated_at`.
+- **`user_travel_preferences`**: `id`, `user_id` (unique), `default_mode`, `avoid_tolls`, `avoid_highways`, `buffer_multiplier`, `updated_at`.
+- **`geocode_cache`**: `id`, `query_hash` (unique), `query_text`, `formatted_address`, `latitude`, `longitude`, `provider`, `cached_at`, `expires_at`.
+- **`departure_logs`** (extended): `selected_route`, `travel_mode`, `travel_estimate_retrieved_at`.
+

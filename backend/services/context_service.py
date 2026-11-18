@@ -64,6 +64,8 @@ class DepartureContext:
     personalized_prep_duration: float = 30.0  # Phase 2 ML behavioral prep duration (minutes)
     estimated_travel_duration: float = 20.0  # static/route travel estimate (minutes)
     live_travel_duration: Optional[float] = None  # dynamic/traffic-adjusted travel duration (minutes)
+    personalized_travel_duration: Optional[float] = None  # Phase 2/3 behavioral personalized travel duration (minutes)
+    selected_route: Optional[str] = None
     weather_conditions: Optional[Dict[str, Any]] = None
     traffic_conditions: Optional[Dict[str, Any]] = None
     safety_buffer: float = 10.0  # minutes
@@ -143,6 +145,8 @@ class DepartureContext:
             personalized_prep_duration=float(data.get("personalized_prep_duration", 30.0)),
             estimated_travel_duration=float(data.get("estimated_travel_duration", 20.0)),
             live_travel_duration=float(data["live_travel_duration"]) if data.get("live_travel_duration") is not None else None,
+            personalized_travel_duration=float(data["personalized_travel_duration"]) if data.get("personalized_travel_duration") is not None else None,
+            selected_route=data.get("selected_route"),
             weather_conditions=data.get("weather_conditions"),
             traffic_conditions=data.get("traffic_conditions"),
             safety_buffer=float(data.get("safety_buffer", 10.0)),
@@ -392,6 +396,8 @@ class ContextService:
             personalized_prep_duration=personalized_prep,
             estimated_travel_duration=est_travel,
             live_travel_duration=live_travel,
+            personalized_travel_duration=travel_ctx.get("personalized_travel_duration"),
+            selected_route=travel_ctx.get("selected_route"),
             weather_conditions=weather_conditions,
             traffic_conditions=traffic_conditions,
             safety_buffer=final_safety_buffer,

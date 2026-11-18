@@ -10,12 +10,20 @@ from typing import List, Optional
 from pydantic import BaseModel
 
 try:
-    from database import get_db, init_db, User, Event, DepartureLog, ModelVersionRecord, CalendarConnection, CalendarEventRecord
+    from database import (
+        get_db, init_db, User, Event, DepartureLog, ModelVersionRecord,
+        CalendarConnection, CalendarEventRecord, UserSavedLocation,
+        UserSavedRoute, UserTravelPreferences, GeocodeCacheRecord
+    )
     import generator
     import models
     import security
 except ImportError:
-    from backend.database import get_db, init_db, User, Event, DepartureLog, ModelVersionRecord, CalendarConnection, CalendarEventRecord
+    from backend.database import (
+        get_db, init_db, User, Event, DepartureLog, ModelVersionRecord,
+        CalendarConnection, CalendarEventRecord, UserSavedLocation,
+        UserSavedRoute, UserTravelPreferences, GeocodeCacheRecord
+    )
     import backend.generator as generator
     import backend.models as models
     import backend.security as security
@@ -127,6 +135,10 @@ class LogCreateSchema(BaseModel):
     observed_finding_items_min: Optional[float] = None
     observed_phone_usage_min: Optional[float] = None
     observed_waiting_min: Optional[float] = None
+    # Travel & Route Provenance (Prompt 3.4)
+    selected_route: Optional[str] = None
+    travel_mode: Optional[str] = "driving"
+    travel_estimate_retrieved_at: Optional[str] = None
 
 class LogSchema(BaseModel):
     id: int
@@ -137,6 +149,8 @@ class LogSchema(BaseModel):
     actual_arrival: str
     estimated_prep_duration_min: float
     actual_prep_duration_min: float
+    estimated_travel_duration_min: Optional[float] = 0.0
+    actual_travel_duration_min: Optional[float] = 0.0
     total_delay_min: float
     bag_prepared: bool
     tag_one_last_task: bool
@@ -153,6 +167,9 @@ class LogSchema(BaseModel):
     is_synthetic: Optional[bool] = False
     recorded_at: Optional[str] = None
     observation_status: Optional[str] = "valid"
+    selected_route: Optional[str] = None
+    travel_mode: Optional[str] = "driving"
+    travel_estimate_retrieved_at: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -257,10 +274,12 @@ try:
     from integrations.calendar.outlook import OutlookCalendarIntegration
     from integrations.calendar.mock import MockCalendarIntegration
     from integrations.travel.mock import MockTravelIntegration
+    from integrations.travel.base import TravelMode
     from integrations.traffic.mock import MockTrafficIntegration
     from integrations.weather.mock import MockWeatherIntegration
     from services.context_service import ContextService, DepartureContext
     from services.calendar_service import CalendarService
+    from services.travel_service import TravelService
     from services.departure_optimizer import DepartureOptimizer
     from services.notification_service import NotificationService, NotificationMilestone
     from services.journey_service import JourneyService, JourneyPhase, InvalidJourneyTransitionError
@@ -270,10 +289,12 @@ except ImportError:
     from backend.integrations.calendar.outlook import OutlookCalendarIntegration
     from backend.integrations.calendar.mock import MockCalendarIntegration
     from backend.integrations.travel.mock import MockTravelIntegration
+    from backend.integrations.travel.base import TravelMode
     from backend.integrations.traffic.mock import MockTrafficIntegration
     from backend.integrations.weather.mock import MockWeatherIntegration
     from backend.services.context_service import ContextService, DepartureContext
     from backend.services.calendar_service import CalendarService
+    from backend.services.travel_service import TravelService
     from backend.services.departure_optimizer import DepartureOptimizer
     from backend.services.notification_service import NotificationService, NotificationMilestone
     from backend.services.journey_service import JourneyService, JourneyPhase, InvalidJourneyTransitionError
@@ -296,10 +317,62 @@ calendar_service = CalendarService(
     google_integration=google_calendar_integration,
     outlook_integration=outlook_calendar_integration
 )
+travel_service = TravelService(registry=integration_registry)
 context_service = ContextService(calendar_service=calendar_service, registry=integration_registry)
 departure_optimizer = DepartureOptimizer()
 notification_service = NotificationService()
 journey_service = JourneyService()
+
+# Travel Schemas (Prompt 3.4)
+class SavedLocationCreateSchema(BaseModel):
+    name: str
+    category: str = "custom"
+    address: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    is_primary: bool = False
+
+class SavedLocationUpdateSchema(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    address: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    is_primary: Optional[bool] = None
+
+class SavedRouteCreateSchema(BaseModel):
+    name: str
+    origin_address: str
+    destination_address: str
+    travel_mode: str = "driving"
+    preferred_route_identifier: Optional[str] = None
+    distance_km: Optional[float] = None
+    estimated_duration_min: Optional[float] = None
+    notes: Optional[str] = None
+    origin_lat: Optional[float] = None
+    origin_lng: Optional[float] = None
+    destination_lat: Optional[float] = None
+    destination_lng: Optional[float] = None
+
+class TravelPreferencesUpdateSchema(BaseModel):
+    default_mode: Optional[str] = None
+    avoid_tolls: Optional[bool] = None
+    avoid_highways: Optional[bool] = None
+    buffer_multiplier: Optional[float] = None
+
+class RouteCalculateRequestSchema(BaseModel):
+    origin: str
+    destination: str
+    departure_time: Optional[str] = None
+    mode: str = "driving"
+    alternatives: bool = True
+
+class GeocodeRequestSchema(BaseModel):
+    address: str
+
+class ReverseGeocodeRequestSchema(BaseModel):
+    latitude: float
+    longitude: float
 
 
 # Authentication Endpoints
@@ -1075,6 +1148,7 @@ def get_user_calibration_metrics_endpoint(
 
 
 @app.post("/api/checkout")
+@app.post("/api/logs")
 def create_checkout_log(
     log_in: LogCreateSchema, 
     current_user: User = Depends(get_current_user), 
@@ -1163,7 +1237,10 @@ def create_checkout_log(
         data_source="simulator_checkout",
         is_synthetic=False,
         recorded_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        observation_status="valid"
+        observation_status="valid",
+        selected_route=log_in.selected_route,
+        travel_mode=log_in.travel_mode or "driving",
+        travel_estimate_retrieved_at=log_in.travel_estimate_retrieved_at or datetime.datetime.now(datetime.timezone.utc).isoformat()
     )
     
     db.add(db_log)
@@ -1894,6 +1971,253 @@ def plan_departure_from_calendar_event(
         "context": dep_ctx.to_dict(),
         "optimization": opt_result.to_dict()
     }
+
+
+# =============================================================================
+# TRAVEL & ROUTE INTELLIGENCE ENDPOINTS (Prompt 3.4)
+# =============================================================================
+
+@app.get("/api/travel/locations")
+def get_user_saved_locations(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all saved locations (Home, Workplace, Frequent, Custom) for the user."""
+    return travel_service.list_saved_locations(user_id=current_user.id, db=db)
+
+
+@app.post("/api/travel/locations")
+def create_user_saved_location(
+    loc_in: SavedLocationCreateSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create and validate a new saved location with geocoding."""
+    try:
+        new_loc = travel_service.create_saved_location(
+            user_id=current_user.id,
+            name=loc_in.name,
+            category=loc_in.category,
+            address=loc_in.address,
+            latitude=loc_in.latitude,
+            longitude=loc_in.longitude,
+            is_primary=loc_in.is_primary,
+            db=db
+        )
+        return {"status": "success", "location": new_loc}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.put("/api/travel/locations/{location_id}")
+def update_user_saved_location(
+    location_id: int,
+    loc_in: SavedLocationUpdateSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update an existing saved location."""
+    updates = loc_in.dict(exclude_unset=True)
+    updated = travel_service.update_saved_location(
+        user_id=current_user.id,
+        location_id=location_id,
+        updates=updates,
+        db=db
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Saved location not found.")
+    return {"status": "success", "location": updated}
+
+
+@app.delete("/api/travel/locations/{location_id}")
+def delete_user_saved_location(
+    location_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a saved location ensuring user isolation."""
+    success = travel_service.delete_saved_location(
+        user_id=current_user.id,
+        location_id=location_id,
+        db=db
+    )
+    if not success:
+        raise HTTPException(status_code=404, detail="Saved location not found.")
+    return {"status": "success", "message": "Location deleted successfully."}
+
+
+@app.post("/api/travel/geocode")
+def geocode_address_endpoint(
+    req: GeocodeRequestSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Convert an address string to coordinates with caching and validation."""
+    result = travel_service.geocode_address(req.address, db=db)
+    if not result:
+        raise HTTPException(status_code=400, detail=f"Could not geocode address: '{req.address}'")
+    return {"status": "success", "location": result}
+
+
+@app.post("/api/travel/reverse-geocode")
+def reverse_geocode_endpoint(
+    req: ReverseGeocodeRequestSchema,
+    current_user: User = Depends(get_current_user)
+):
+    """Convert coordinates to a formatted address."""
+    result = travel_service.reverse_geocode(req.latitude, req.longitude)
+    if not result:
+        raise HTTPException(status_code=400, detail="Could not reverse geocode coordinates.")
+    return {"status": "success", "location": result}
+
+
+@app.post("/api/travel/routes")
+def calculate_routes_endpoint(
+    req: RouteCalculateRequestSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Calculate and compare multiple route options for an origin and destination."""
+    try:
+        try:
+            mode_enum = TravelMode(req.mode.lower())
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Unsupported travel mode: '{req.mode}'")
+
+        dep_dt = None
+        if req.departure_time:
+            try:
+                dep_dt = datetime.datetime.fromisoformat(req.departure_time)
+            except Exception:
+                dep_dt = None
+
+        routes_data = travel_service.calculate_routes(
+            user_id=current_user.id,
+            origin=req.origin,
+            destination=req.destination,
+            departure_time=dep_dt,
+            mode=mode_enum,
+            alternatives=req.alternatives,
+            db=db
+        )
+        return {"status": "success", **routes_data}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Routing calculation failed: {str(e)}")
+
+
+@app.post("/api/travel/compare-routes")
+def compare_modes_endpoint(
+    req: RouteCalculateRequestSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Compare travel times and distance across driving, transit, bicycling, and walking."""
+    try:
+        dep_dt = None
+        if req.departure_time:
+            try:
+                dep_dt = datetime.datetime.fromisoformat(req.departure_time)
+            except Exception:
+                dep_dt = None
+
+        comparison = travel_service.compare_modes(
+            user_id=current_user.id,
+            origin=req.origin,
+            destination=req.destination,
+            departure_time=dep_dt,
+            db=db
+        )
+        return {"status": "success", **comparison}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Mode comparison failed: {str(e)}")
+
+
+@app.get("/api/travel/saved-routes")
+def list_user_saved_routes(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all saved preferred corridors/routes."""
+    return travel_service.list_saved_routes(user_id=current_user.id, db=db)
+
+
+@app.post("/api/travel/saved-routes")
+def create_user_saved_route(
+    route_in: SavedRouteCreateSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Save a preferred route choice."""
+    new_route = travel_service.save_preferred_route(
+        user_id=current_user.id,
+        name=route_in.name,
+        origin_address=route_in.origin_address,
+        destination_address=route_in.destination_address,
+        travel_mode=route_in.travel_mode,
+        preferred_route_identifier=route_in.preferred_route_identifier,
+        distance_km=route_in.distance_km,
+        estimated_duration_min=route_in.estimated_duration_min,
+        notes=route_in.notes,
+        origin_lat=route_in.origin_lat,
+        origin_lng=route_in.origin_lng,
+        destination_lat=route_in.destination_lat,
+        destination_lng=route_in.destination_lng,
+        db=db
+    )
+    return {"status": "success", "route": new_route}
+
+
+@app.delete("/api/travel/saved-routes/{route_id}")
+def delete_user_saved_route(
+    route_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a saved route ensuring user isolation."""
+    success = travel_service.delete_saved_route(
+        user_id=current_user.id,
+        route_id=route_id,
+        db=db
+    )
+    if not success:
+        raise HTTPException(status_code=404, detail="Saved route not found.")
+    return {"status": "success", "message": "Route deleted successfully."}
+
+
+@app.get("/api/travel/preferences")
+def get_user_travel_preferences(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Retrieve user routing and buffer preferences."""
+    return travel_service.get_travel_preferences(user_id=current_user.id, db=db)
+
+
+@app.put("/api/travel/preferences")
+def update_user_travel_preferences(
+    pref_in: TravelPreferencesUpdateSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update user routing preferences."""
+    updates = pref_in.dict(exclude_unset=True)
+    updated = travel_service.update_travel_preferences(
+        user_id=current_user.id,
+        updates=updates,
+        db=db
+    )
+    return {"status": "success", "preferences": updated}
+
+
+@app.get("/api/travel/analytics")
+def get_travel_reliability_analytics(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Retrieve personal travel reliability metrics and historical bias analysis."""
+    return travel_service.get_travel_reliability_metrics(user_id=current_user.id, db=db)
 
 
 

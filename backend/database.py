@@ -120,6 +120,11 @@ class DepartureLog(Base):
     observation_status = Column(String, default=ObservationStatus.VALID.value, nullable=False)
     attribution_metadata = Column(Text, nullable=True)
 
+    # Travel & Route Provenance (Prompt 3.4)
+    selected_route = Column(String, nullable=True)
+    travel_mode = Column(String, default="driving", nullable=True)
+    travel_estimate_retrieved_at = Column(String, nullable=True)
+
     user = relationship("User", back_populates="departure_logs")
     event = relationship("Event", back_populates="logs")
 
@@ -387,6 +392,77 @@ class CalendarEventRecord(Base):
     associated_routine = relationship("Event", backref="calendar_events")
 
 
+class UserSavedLocation(Base):
+    """User-saved favorite or frequent locations (Home, Work, Gym, etc.) (Prompt 3.4)."""
+    __tablename__ = "user_saved_locations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)  # e.g. "Home", "Office", "University"
+    category = Column(String, default="custom", nullable=False)  # home, work, education, frequent, custom
+    address = Column(String, nullable=False)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    is_primary = Column(Boolean, default=False, nullable=False)
+    created_at = Column(String, nullable=False)
+    updated_at = Column(String, nullable=False)
+
+    user = relationship("User", backref="saved_locations")
+
+
+class UserSavedRoute(Base):
+    """User-saved preferred routing alternatives between frequent locations (Prompt 3.4)."""
+    __tablename__ = "user_saved_routes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)  # e.g. "Morning Commute via Highway"
+    origin_address = Column(String, nullable=False)
+    origin_lat = Column(Float, nullable=True)
+    origin_lng = Column(Float, nullable=True)
+    destination_address = Column(String, nullable=False)
+    destination_lat = Column(Float, nullable=True)
+    destination_lng = Column(Float, nullable=True)
+    travel_mode = Column(String, default="driving", nullable=False)  # driving, transit, walking, bicycling
+    preferred_route_identifier = Column(String, nullable=True)  # e.g. "via I-90 E", "Route 1"
+    distance_km = Column(Float, nullable=True)
+    estimated_duration_min = Column(Float, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(String, nullable=False)
+    updated_at = Column(String, nullable=False)
+
+    user = relationship("User", backref="saved_routes")
+
+
+class UserTravelPreferences(Base):
+    """User defaults and routing preferences (Prompt 3.4)."""
+    __tablename__ = "user_travel_preferences"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False, index=True)
+    default_mode = Column(String, default="driving", nullable=False)
+    avoid_tolls = Column(Boolean, default=False, nullable=False)
+    avoid_highways = Column(Boolean, default=False, nullable=False)
+    buffer_multiplier = Column(Float, default=1.0, nullable=False)
+    updated_at = Column(String, nullable=False)
+
+    user = relationship("User", backref="travel_preferences")
+
+
+class GeocodeCacheRecord(Base):
+    """Cached geocoded addresses and coordinates to minimize external queries (Prompt 3.4)."""
+    __tablename__ = "geocode_cache"
+
+    id = Column(Integer, primary_key=True, index=True)
+    query_hash = Column(String, unique=True, index=True, nullable=False)
+    query_text = Column(String, nullable=False)
+    formatted_address = Column(String, nullable=False)
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    provider = Column(String, default="geocoder", nullable=False)
+    cached_at = Column(String, nullable=False)
+    expires_at = Column(String, nullable=True)
+
 
 def migrate_db(db_engine=None):
     """Safely migrate SQLite database schema to include provenance fields and backfill legacy records."""
@@ -410,6 +486,12 @@ def migrate_db(db_engine=None):
             conn.execute(text("ALTER TABLE departure_logs ADD COLUMN observation_status VARCHAR DEFAULT 'valid'"))
         if "attribution_metadata" not in columns:
             conn.execute(text("ALTER TABLE departure_logs ADD COLUMN attribution_metadata TEXT"))
+        if "selected_route" not in columns:
+            conn.execute(text("ALTER TABLE departure_logs ADD COLUMN selected_route VARCHAR"))
+        if "travel_mode" not in columns:
+            conn.execute(text("ALTER TABLE departure_logs ADD COLUMN travel_mode VARCHAR DEFAULT 'driving'"))
+        if "travel_estimate_retrieved_at" not in columns:
+            conn.execute(text("ALTER TABLE departure_logs ADD COLUMN travel_estimate_retrieved_at VARCHAR"))
 
         # Ensure consent_to_global_training column exists in users
         user_table = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")).fetchone()
@@ -690,6 +772,87 @@ def migrate_db(db_engine=None):
         conn.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_calendar_connections_user_provider
             ON calendar_connections (user_id, provider)
+        """))
+
+        # Create user_saved_locations table if not present (Prompt 3.4)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS user_saved_locations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                name VARCHAR NOT NULL,
+                category VARCHAR NOT NULL DEFAULT 'custom',
+                address VARCHAR NOT NULL,
+                latitude FLOAT,
+                longitude FLOAT,
+                is_primary BOOLEAN DEFAULT 0,
+                created_at VARCHAR NOT NULL,
+                updated_at VARCHAR NOT NULL
+            )
+        """))
+
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_saved_locations_user
+            ON user_saved_locations (user_id)
+        """))
+
+        # Create user_saved_routes table if not present (Prompt 3.4)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS user_saved_routes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                name VARCHAR NOT NULL,
+                origin_address VARCHAR NOT NULL,
+                origin_lat FLOAT,
+                origin_lng FLOAT,
+                destination_address VARCHAR NOT NULL,
+                destination_lat FLOAT,
+                destination_lng FLOAT,
+                travel_mode VARCHAR NOT NULL DEFAULT 'driving',
+                preferred_route_identifier VARCHAR,
+                distance_km FLOAT,
+                estimated_duration_min FLOAT,
+                notes TEXT,
+                created_at VARCHAR NOT NULL,
+                updated_at VARCHAR NOT NULL
+            )
+        """))
+
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_saved_routes_user
+            ON user_saved_routes (user_id)
+        """))
+
+        # Create user_travel_preferences table if not present (Prompt 3.4)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS user_travel_preferences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
+                default_mode VARCHAR NOT NULL DEFAULT 'driving',
+                avoid_tolls BOOLEAN DEFAULT 0,
+                avoid_highways BOOLEAN DEFAULT 0,
+                buffer_multiplier FLOAT DEFAULT 1.0,
+                updated_at VARCHAR NOT NULL
+            )
+        """))
+
+        # Create geocode_cache table if not present (Prompt 3.4)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS geocode_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                query_hash VARCHAR UNIQUE NOT NULL,
+                query_text VARCHAR NOT NULL,
+                formatted_address VARCHAR NOT NULL,
+                latitude FLOAT NOT NULL,
+                longitude FLOAT NOT NULL,
+                provider VARCHAR NOT NULL DEFAULT 'geocoder',
+                cached_at VARCHAR NOT NULL,
+                expires_at VARCHAR
+            )
+        """))
+
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_geocode_cache_hash
+            ON geocode_cache (query_hash)
         """))
 
         conn.commit()

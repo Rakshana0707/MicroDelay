@@ -39,7 +39,8 @@ import {
   ThumbsUp,
   ThumbsDown,
   CheckCircle2,
-  Target
+  Target,
+  MapPin
 } from 'lucide-react';
 import {
   BarChart,
@@ -63,6 +64,7 @@ import { AdaptiveRecommendationsPanel } from './components/AdaptiveRecommendatio
 import { DriftAlertBanner } from './components/DriftAlertBanner';
 import { PredictionExplanationModal } from './components/PredictionExplanationModal';
 import { CalendarConnectionsSection } from './components/CalendarConnectionsSection';
+import { TravelIntelligenceSection } from './components/TravelIntelligenceSection';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (import.meta.env.PROD ? '' : 'http://localhost:8000');
 
@@ -876,7 +878,7 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
 
   // Tab State
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'comparison' | 'profile' | 'interventions' | 'history' | 'routines' | 'calendar'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'comparison' | 'profile' | 'interventions' | 'history' | 'routines' | 'calendar' | 'travel'>('dashboard');
   
   // Handle Google & Outlook OAuth redirect callback on page load (Prompt 3.2 & 3.3)
   useEffect(() => {
@@ -2420,7 +2422,14 @@ export default function App() {
               onClick={() => setActiveTab('calendar')}
             >
               <Calendar size={16} />
-              Google Calendar
+              Calendars
+            </button>
+            <button 
+              className={`tab-btn ${activeTab === 'travel' ? 'active' : ''}`}
+              onClick={() => setActiveTab('travel')}
+            >
+              <MapPin size={16} />
+              Travel & Routes
             </button>
           </div>
         </div>
@@ -6861,7 +6870,7 @@ export default function App() {
             </div>
           )}
 
-          {/* Calendar Connections & Synchronization Tab (Prompt 3.2) */}
+          {/* Calendar Connections & Synchronization Tab (Prompt 3.2 & 3.3) */}
           {activeTab === 'calendar' && (
             <div className="tab-pane active">
               <CalendarConnectionsSection
@@ -6875,6 +6884,13 @@ export default function App() {
                   setActiveTab('simulator');
                 }}
               />
+            </div>
+          )}
+
+          {/* Travel & Route Intelligence Engine Tab (Prompt 3.4) */}
+          {activeTab === 'travel' && (
+            <div className="tab-pane active">
+              <TravelIntelligenceSection token={token} />
             </div>
           )}
 
