@@ -395,6 +395,53 @@ interface InterventionData {
   completion_status?: string | null;
 }
 
+// Behavioral Drift Detection & Monitoring Interfaces (Prompt 2.8)
+interface DriftEventData {
+  drift_event_id: string;
+  feature_name: string;
+  drift_type: 'data_drift' | 'concept_drift' | 'behavioral_improvement' | 'behavioral_deterioration';
+  detection_method: string;
+  baseline_value: number;
+  current_value: number;
+  drift_score: number;
+  p_value?: number | null;
+  severity: 'informational' | 'moderate' | 'significant';
+  valence: 'positive' | 'negative' | 'neutral';
+  temporal_window: string;
+  sample_count_baseline: number;
+  sample_count_current: number;
+  detected_at: string;
+  status: 'active' | 'acknowledged' | 'resolved' | 'dismissed';
+  humanized_summary: string;
+  is_statistically_significant: boolean;
+}
+
+interface DriftAnalysisData {
+  status: string;
+  total_observations: number;
+  events_detected: DriftEventData[];
+  improvements_count: number;
+  deteriorations_count: number;
+  data_drifts_count: number;
+  summary: string;
+  evaluated_at: string;
+  message?: string;
+}
+
+interface ModelMonitoringData {
+  status: string;
+  model_version?: string;
+  rolling_mae?: number | null;
+  rolling_bias?: number | null;
+  baseline_mae?: number;
+  performance_degraded: boolean;
+  degradation_pct?: number;
+  error_distribution_shift?: boolean;
+  retrain_recommended?: boolean;
+  evaluated_at?: string;
+  message?: string;
+}
+
 interface RiskPredictionData {
   late_probability: number | null;
   risk_category: 'low' | 'moderate' | 'high' | 'extreme' | null;
@@ -812,6 +859,14 @@ export default function App() {
   const [feedbackHelpful, setFeedbackHelpful] = useState<boolean>(true);
   const [expandedInterventionId, setExpandedInterventionId] = useState<string | null>(null);
   const [interventionTabFilter, setInterventionTabFilter] = useState<'all' | 'suggested' | 'active' | 'completed'>('all');
+
+  // Behavioral Drift Detection & Monitoring States (Prompt 2.8)
+  const [driftAnalysis, setDriftAnalysis] = useState<DriftAnalysisData | null>(null);
+  const [driftEvents, setDriftEvents] = useState<DriftEventData[]>([]);
+  const [modelMonitoring, setModelMonitoring] = useState<ModelMonitoringData | null>(null);
+  const [driftLoading, setDriftLoading] = useState<boolean>(false);
+  const [driftFilter, setDriftFilter] = useState<'all' | 'improvements' | 'friction' | 'shifts'>('all');
+  const [driftSubTab, setDriftSubTab] = useState<'trends' | 'model_health'>('trends');
 
   // References for Simulator Clock
   const clockIntervalRef = useRef<any>(null);
@@ -1516,12 +1571,85 @@ export default function App() {
     }
   };
 
+  // 9. Fetch Behavioral Drift Detection & Monitoring (Prompt 2.8)
+  const fetchDriftData = async (overrideToken?: string) => {
+    const activeToken = overrideToken || token;
+    if (!activeToken) return;
+    const headers = { 'Authorization': `Bearer ${activeToken}` };
+    setDriftLoading(true);
+
+    try {
+      const anRes = await fetch(`${BACKEND_URL}/api/intelligence/drift/analysis`, { headers });
+      if (anRes.ok) {
+        setDriftAnalysis(await anRes.json());
+      }
+    } catch (e) {
+      console.warn("Could not fetch drift analysis:", e);
+    }
+
+    try {
+      const evRes = await fetch(`${BACKEND_URL}/api/intelligence/drift/events`, { headers });
+      if (evRes.ok) {
+        setDriftEvents(await evRes.json());
+      }
+    } catch (e) {
+      console.warn("Could not fetch drift events:", e);
+    }
+
+    try {
+      const monRes = await fetch(`${BACKEND_URL}/api/intelligence/drift/model-monitoring`, { headers });
+      if (monRes.ok) {
+        setModelMonitoring(await monRes.json());
+      }
+    } catch (e) {
+      console.warn("Could not fetch model monitoring:", e);
+    } finally {
+      setDriftLoading(false);
+    }
+  };
+
+  const handleAcknowledgeDriftEvent = async (eventId: string) => {
+    if (!token) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/intelligence/drift/events/${eventId}/acknowledge`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'acknowledged' })
+      });
+      if (res.ok) {
+        await fetchDriftData();
+      }
+    } catch (e) {
+      console.error("Error acknowledging drift event:", e);
+    }
+  };
+
+  const handleRecalibrateBaseline = async () => {
+    if (!token) return;
+    setDriftLoading(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/intelligence/drift/recalibrate`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
+      });
+      if (res.ok) {
+        await fetchDriftData();
+        await fetchBehavioralProfile();
+      }
+    } catch (e) {
+      console.error("Error recalibrating baseline:", e);
+    } finally {
+      setDriftLoading(false);
+    }
+  };
+
   const handleRefresh = async () => {
     setIsRefreshing(true);
     await fetchData();
     await fetchModelIntelligence();
     await fetchBehavioralProfile();
     await fetchInterventions();
+    await fetchDriftData();
     setIsRefreshing(false);
   };
 
@@ -2072,6 +2200,7 @@ export default function App() {
               onClick={() => {
                 setActiveTab('profile');
                 fetchBehavioralProfile();
+                fetchDriftData();
               }}
             >
               <UserCheck size={16} />
@@ -2614,6 +2743,75 @@ export default function App() {
                       style={{ fontSize: '0.8rem', padding: '0.4rem 0.85rem' }}
                     >
                       View Habits & Interventions →
+                    </button>
+                  </div>
+                )}
+
+                {/* Behavioral Drift & Habit Change Spotlight (Prompt 2.8) */}
+                {driftAnalysis && driftAnalysis.events_detected && driftAnalysis.events_detected.length > 0 && (
+                  <div style={{
+                    marginBottom: '1rem',
+                    padding: '0.85rem 1rem',
+                    borderRadius: '8px',
+                    border: (driftAnalysis.improvements_count || 0) > 0 && (driftAnalysis.deteriorations_count || 0) === 0
+                      ? '1px solid rgba(16, 185, 129, 0.35)'
+                      : (driftAnalysis.deteriorations_count || 0) > 0
+                      ? '1px solid rgba(239, 68, 68, 0.35)'
+                      : '1px solid rgba(139, 92, 246, 0.35)',
+                    background: (driftAnalysis.improvements_count || 0) > 0 && (driftAnalysis.deteriorations_count || 0) === 0
+                      ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(59, 130, 246, 0.05) 100%)'
+                      : (driftAnalysis.deteriorations_count || 0) > 0
+                      ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.08) 0%, rgba(245, 158, 11, 0.05) 100%)'
+                      : 'linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(59, 130, 246, 0.05) 100%)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: '0.75rem'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <div style={{
+                        padding: '0.5rem',
+                        borderRadius: '6px',
+                        backgroundColor: (driftAnalysis.improvements_count || 0) > 0 && (driftAnalysis.deteriorations_count || 0) === 0
+                          ? 'rgba(16, 185, 129, 0.2)'
+                          : (driftAnalysis.deteriorations_count || 0) > 0
+                          ? 'rgba(239, 68, 68, 0.2)'
+                          : 'rgba(139, 92, 246, 0.2)',
+                        color: (driftAnalysis.improvements_count || 0) > 0 && (driftAnalysis.deteriorations_count || 0) === 0
+                          ? 'var(--accent-success)'
+                          : (driftAnalysis.deteriorations_count || 0) > 0
+                          ? 'var(--accent-danger)'
+                          : '#8b5cf6',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}>
+                        <TrendingUp size={20} />
+                      </div>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-primary)' }}>
+                          {(driftAnalysis.improvements_count || 0) > 0 && (driftAnalysis.deteriorations_count || 0) === 0
+                            ? 'Positive Habit Trend: Punctuality Progress Detected'
+                            : (driftAnalysis.deteriorations_count || 0) > 0
+                            ? 'Routine Shift: Emerging Departure Friction Detected'
+                            : 'Routine Evolution: Distributional Shift Detected'}
+                        </div>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                          {driftAnalysis.summary}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      className="tab-btn"
+                      onClick={() => {
+                        setActiveTab('profile');
+                        fetchBehavioralProfile();
+                        fetchDriftData();
+                      }}
+                      style={{ fontSize: '0.8rem', padding: '0.4rem 0.85rem' }}
+                    >
+                      View Routine Analysis →
                     </button>
                   </div>
                 )}
@@ -5559,6 +5757,308 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+
+              {/* BEHAVIORAL DRIFT DETECTION & HABIT CHANGE MONITORING (Prompt 2.8) */}
+              <div className="card" style={{ marginTop: '0.5rem' }}>
+                <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
+                  <div>
+                    <h3 className="card-title">
+                      <TrendingUp size={20} style={{ color: 'var(--accent-primary)' }} />
+                      Behavioral Drift & Habit Change Monitoring
+                    </h3>
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                      Continuous chronological analysis comparing recent 7-day and 30-day operational windows against your historical baseline.
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <button 
+                      className="tab-btn"
+                      onClick={handleRecalibrateBaseline}
+                      disabled={driftLoading}
+                      style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                      title="Force recomputation of baseline distributions and profile metrics"
+                    >
+                      <RotateCcw size={14} className={driftLoading ? 'spin' : ''} />
+                      Recalibrate Baseline
+                    </button>
+                    <button 
+                      className="tab-btn"
+                      onClick={() => fetchDriftData()}
+                      disabled={driftLoading}
+                      style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                    >
+                      <RefreshCw size={14} className={driftLoading ? 'spin' : ''} />
+                      Refresh
+                    </button>
+                  </div>
+                </div>
+
+                {/* Sub-view Navigation & Status Summary */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginTop: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem' }}>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <button 
+                      className={`tab-btn ${driftSubTab === 'trends' ? 'active' : ''}`}
+                      onClick={() => setDriftSubTab('trends')}
+                      style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
+                    >
+                      <Activity size={14} />
+                      Habit Changes ({driftEvents.length})
+                    </button>
+                    <button 
+                      className={`tab-btn ${driftSubTab === 'model_health' ? 'active' : ''}`}
+                      onClick={() => setDriftSubTab('model_health')}
+                      style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
+                    >
+                      <BrainCircuit size={14} />
+                      Predictive Model Health
+                    </button>
+                  </div>
+
+                  {/* Status Banner Pill */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span 
+                      className="status-badge"
+                      style={{
+                        backgroundColor: (driftAnalysis?.improvements_count || 0) > 0 && (driftAnalysis?.deteriorations_count || 0) === 0
+                          ? 'rgba(16, 185, 129, 0.15)'
+                          : (driftAnalysis?.deteriorations_count || 0) > 0
+                          ? 'rgba(239, 68, 68, 0.15)'
+                          : 'rgba(59, 130, 246, 0.15)',
+                        color: (driftAnalysis?.improvements_count || 0) > 0 && (driftAnalysis?.deteriorations_count || 0) === 0
+                          ? 'var(--accent-success)'
+                          : (driftAnalysis?.deteriorations_count || 0) > 0
+                          ? 'var(--accent-danger)'
+                          : 'var(--accent-primary)',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        padding: '0.25rem 0.6rem'
+                      }}
+                    >
+                      {(driftAnalysis?.improvements_count || 0) > 0 && (driftAnalysis?.deteriorations_count || 0) === 0
+                        ? '🟢 Positive Habit Progress'
+                        : (driftAnalysis?.deteriorations_count || 0) > 0
+                        ? '🔴 Routine Friction Detected'
+                        : (driftAnalysis?.data_drifts_count || 0) > 0
+                        ? '🟣 Routine Shift Detected'
+                        : '🔵 Routines Stable'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* SUBTAB 1: HABIT CHANGES & DRIFT EVENTS */}
+                {driftSubTab === 'trends' && (
+                  <div style={{ marginTop: '1.25rem' }}>
+                    {/* Filter controls */}
+                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+                      <button 
+                        className={`tab-btn ${driftFilter === 'all' ? 'active' : ''}`}
+                        onClick={() => setDriftFilter('all')}
+                        style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}
+                      >
+                        All ({driftEvents.length})
+                      </button>
+                      <button 
+                        className={`tab-btn ${driftFilter === 'improvements' ? 'active' : ''}`}
+                        onClick={() => setDriftFilter('improvements')}
+                        style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem', color: 'var(--accent-success)' }}
+                      >
+                        Improvements ({driftEvents.filter(e => e.drift_type === 'behavioral_improvement').length})
+                      </button>
+                      <button 
+                        className={`tab-btn ${driftFilter === 'friction' ? 'active' : ''}`}
+                        onClick={() => setDriftFilter('friction')}
+                        style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem', color: 'var(--accent-danger)' }}
+                      >
+                        Friction & Lateness ({driftEvents.filter(e => e.drift_type === 'behavioral_deterioration').length})
+                      </button>
+                      <button 
+                        className={`tab-btn ${driftFilter === 'shifts' ? 'active' : ''}`}
+                        onClick={() => setDriftFilter('shifts')}
+                        style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem', color: '#8b5cf6' }}
+                      >
+                        Input Shifts ({driftEvents.filter(e => e.drift_type === 'data_drift').length})
+                      </button>
+                    </div>
+
+                    {/* Overall Summary Notice */}
+                    {driftAnalysis?.summary && (
+                      <div style={{ 
+                        padding: '0.75rem 1rem', 
+                        borderRadius: '6px', 
+                        backgroundColor: 'var(--bg-primary)', 
+                        border: '1px solid var(--border-color)', 
+                        fontSize: '0.85rem',
+                        marginBottom: '1rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem'
+                      }}>
+                        <Info size={16} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
+                        <span>{driftAnalysis.summary}</span>
+                      </div>
+                    )}
+
+                    {/* Cards Grid */}
+                    {driftEvents.length > 0 ? (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: '1rem' }}>
+                        {driftEvents
+                          .filter(e => {
+                            if (driftFilter === 'improvements') return e.drift_type === 'behavioral_improvement';
+                            if (driftFilter === 'friction') return e.drift_type === 'behavioral_deterioration';
+                            if (driftFilter === 'shifts') return e.drift_type === 'data_drift';
+                            return true;
+                          })
+                          .map((ev) => (
+                            <div 
+                              key={ev.drift_event_id} 
+                              className={`drift-card ${ev.valence === 'positive' ? 'positive' : ev.valence === 'negative' ? 'negative' : 'neutral'}`}
+                            >
+                              {/* Card Header */}
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                  <span 
+                                    className="status-badge"
+                                    style={{
+                                      backgroundColor: ev.valence === 'positive' ? 'rgba(16, 185, 129, 0.15)' : ev.valence === 'negative' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(139, 92, 246, 0.15)',
+                                      color: ev.valence === 'positive' ? 'var(--accent-success)' : ev.valence === 'negative' ? 'var(--accent-danger)' : '#8b5cf6',
+                                      fontSize: '0.7rem'
+                                    }}
+                                  >
+                                    {ev.drift_type.replace('_', ' ').toUpperCase()}
+                                  </span>
+                                  <span className={`drift-rigor-pill ${ev.is_statistically_significant ? 'verified' : 'trend'}`}>
+                                    {ev.is_statistically_significant ? '✓ Statistically Verified' : '~ Descriptive Trend'}
+                                  </span>
+                                </div>
+                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                                  {ev.detection_method.replace('_', ' ')}
+                                </span>
+                              </div>
+
+                              {/* Humanized summary statement */}
+                              <div style={{ fontSize: '0.88rem', fontWeight: 500, color: 'var(--text-primary)', lineHeight: 1.4 }}>
+                                {ev.humanized_summary}
+                              </div>
+
+                              {/* Numerical comparison row */}
+                              <div className="drift-metric-row">
+                                <span style={{ color: 'var(--text-muted)' }}>Baseline: <strong>{ev.baseline_value}</strong></span>
+                                <span style={{ color: 'var(--text-muted)' }}>→</span>
+                                <span style={{ color: ev.valence === 'positive' ? 'var(--accent-success)' : ev.valence === 'negative' ? 'var(--accent-danger)' : 'var(--text-primary)', fontWeight: 600 }}>
+                                  Recent: <strong>{ev.current_value}</strong>
+                                </span>
+                                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                                  Score: {ev.drift_score}
+                                </span>
+                              </div>
+
+                              {/* Card Footer */}
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.25rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                <span>
+                                  {ev.sample_count_baseline} baseline vs {ev.sample_count_current} recent checkouts
+                                </span>
+                                {ev.status === 'active' ? (
+                                  <button
+                                    className="tab-btn"
+                                    onClick={() => handleAcknowledgeDriftEvent(ev.drift_event_id)}
+                                    style={{ fontSize: '0.72rem', padding: '0.2rem 0.5rem' }}
+                                  >
+                                    Acknowledge
+                                  </button>
+                                ) : (
+                                  <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>Acknowledged</span>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    ) : (
+                      <div className="card" style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                        No behavioral drift events detected. Your departure timings, preparation consistency, and distraction habits remain stable compared with your baseline!
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* SUBTAB 2: PREDICTIVE MODEL HEALTH (CONCEPT DRIFT VS INPUT DRIFT) */}
+                {driftSubTab === 'model_health' && (
+                  <div style={{ marginTop: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    {/* Educational notice banner */}
+                    <div className="habit-banner">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, color: 'var(--accent-primary)', fontSize: '0.85rem' }}>
+                        <ShieldCheck size={16} />
+                        Principle: Separating Routine Evolution from Predictive Degradation
+                      </div>
+                      <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                        A shift in when you prepare or wake up is a natural human routine evolution (<strong>Input Data Drift</strong>) and is not inherently bad. 
+                        In contrast, <strong>Concept Drift</strong> occurs only when the ML model's prediction accuracy degrades significantly against your true observed departure delays.
+                      </p>
+                    </div>
+
+                    {/* Model Monitoring Stats Grid */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
+                      <div className="model-health-card">
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          Rolling Prediction MAE
+                        </div>
+                        <div style={{ fontSize: '1.6rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
+                          {modelMonitoring?.rolling_mae !== null && modelMonitoring?.rolling_mae !== undefined ? `${modelMonitoring.rolling_mae}m` : '--'}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          Baseline MAE: {modelMonitoring?.baseline_mae ?? 4.0}m
+                        </div>
+                      </div>
+
+                      <div className="model-health-card">
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          Signed Prediction Bias
+                        </div>
+                        <div style={{ 
+                          fontSize: '1.6rem', 
+                          fontWeight: 700, 
+                          fontFamily: 'var(--font-mono)', 
+                          color: (modelMonitoring?.rolling_bias || 0) > 3.0 ? 'var(--accent-danger)' : (modelMonitoring?.rolling_bias || 0) < -3.0 ? 'var(--accent-warning)' : 'var(--accent-success)' 
+                        }}>
+                          {modelMonitoring?.rolling_bias !== null && modelMonitoring?.rolling_bias !== undefined
+                            ? (modelMonitoring.rolling_bias > 0 ? `+${modelMonitoring.rolling_bias.toFixed(1)}m` : `${modelMonitoring.rolling_bias.toFixed(1)}m`)
+                            : '--'}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          {(modelMonitoring?.rolling_bias || 0) > 0 ? 'Underestimating actual delays' : 'Overestimating actual delays'}
+                        </div>
+                      </div>
+
+                      <div className="model-health-card">
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          Predictive Model Status
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.25rem' }}>
+                          <span 
+                            className="status-badge"
+                            style={{
+                              backgroundColor: modelMonitoring?.performance_degraded ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+                              color: modelMonitoring?.performance_degraded ? 'var(--accent-danger)' : 'var(--accent-success)',
+                              fontSize: '0.85rem',
+                              fontWeight: 700,
+                              padding: '0.35rem 0.75rem'
+                            }}
+                          >
+                            {modelMonitoring?.performance_degraded ? '⚠️ Degradation Detected' : '✓ Accuracy Healthy'}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          {modelMonitoring?.retrain_recommended ? 'Personalized retrain recommended' : 'Active model remains operational'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Active Safety Guarantee Note */}
+                    <div style={{ background: 'rgba(0,0,0,0.2)', padding: '0.85rem 1rem', borderRadius: '6px', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                      🛡️ <strong>MicroDelay Responsible Adaptation Policy:</strong> If predictive degradation is detected, candidate models are trained on your updated historical checkouts and tested against chronological holdouts. Your active production model is strictly preserved until a new model proves statistically superior.
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

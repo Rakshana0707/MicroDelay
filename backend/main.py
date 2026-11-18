@@ -186,6 +186,9 @@ class InterventionFeedbackSchema(BaseModel):
     notes: Optional[str] = None
     helpful: Optional[bool] = None
 
+class DriftEventAcknowledgeSchema(BaseModel):
+    status: Optional[str] = "acknowledged"
+
 # Authentication Endpoints
 @app.post("/api/auth/register", response_model=AuthTokenSchema)
 def register_user(user_in: UserRegisterSchema, db: Session = Depends(get_db)):
@@ -862,6 +865,63 @@ def get_intervention_effectiveness_endpoint(
         raise HTTPException(status_code=404, detail=str(e))
 
 
+# =====================================================================
+# Behavioral Drift Detection & Monitoring Endpoints (Prompt 2.8)
+# =====================================================================
+
+@app.get("/api/intelligence/drift/analysis")
+def get_user_drift_analysis_endpoint(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Execute multi-window statistical drift diagnosis (KS, PSI, Welch t-test, Page-Hinkley)."""
+    return models.analyze_user_drift(db, current_user.id)
+
+
+@app.get("/api/intelligence/drift/events")
+def get_user_drift_events_endpoint(
+    status: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List historical diagnosed drift events for authenticated user."""
+    return models.get_user_drift_events(db, current_user.id, status=status)
+
+
+@app.post("/api/intelligence/drift/events/{drift_event_id}/acknowledge")
+def acknowledge_drift_event_endpoint(
+    drift_event_id: str,
+    req: DriftEventAcknowledgeSchema,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Acknowledge, resolve, or dismiss a diagnosed drift event."""
+    try:
+        return models.acknowledge_user_drift_event(
+            db, current_user.id, drift_event_id, new_status=req.status or "acknowledged"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/intelligence/drift/model-monitoring")
+def get_model_monitoring_endpoint(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Inspect model predictive accuracy monitoring (rolling MAE & signed bias)."""
+    return models.get_user_model_monitoring(db, current_user.id)
+
+
+@app.post("/api/intelligence/drift/recalibrate")
+def recalibrate_baseline_endpoint(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Force recomputation of user behavioral baseline, profile snapshot, and drift metrics."""
+    return models.recalibrate_user_baseline(db, current_user.id)
+
+
 @app.post("/api/checkout")
 def create_checkout_log(
     log_in: LogCreateSchema, 
@@ -966,6 +1026,12 @@ def create_checkout_log(
         models.get_user_behavioral_profile(db, current_user.id, provenance="real")
     except Exception as prof_err:
         print(f"Profile auto-update notice: {prof_err}")
+
+    # Evaluate predictive health and behavioral drift after checkout
+    try:
+        models.get_user_model_monitoring(db, current_user.id)
+    except Exception as mon_err:
+        print(f"Model monitoring notice: {mon_err}")
 
     
     return {

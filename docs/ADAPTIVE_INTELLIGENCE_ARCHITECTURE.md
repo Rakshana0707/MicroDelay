@@ -656,3 +656,118 @@ When a user completes an active trial, `EffectivenessMeasurementService` evaluat
   - Completed Trials Showcase displaying measured before/after impact chips (Delay $\Delta$, Lateness $\Delta$), 5-star user rating, qualitative notes, confounder tags, and scientific causation disclaimer.
   - **Completion Feedback Modal:** Interactive dialog enabling 1-5 star ratings, helpfulness toggle, and qualitative user reflection notes.
 
+---
+
+## 12. Behavioral Drift Detection & Habit Change Monitoring (Prompt 2.8)
+
+### 12.1 Objective & Architecture
+Human morning routines are not static; people change schedules, wake up later during examination periods, adapt to timetable alterations, adopt remote work patterns, or improve punctuality following interventions. 
+
+MicroDelay 2.0 introduces an advanced **Behavioral Drift & Habit Change Monitoring Engine** (`backend/ml/drift.py`) designed to identify meaningful routine shifts while strictly separating input data evolution from predictive model degradation.
+
+```mermaid
+flowchart TD
+    Logs[Chronological Departure Logs] --> BaselineEngine[BehavioralBaselineService]
+    BaselineEngine --> BaselineRecord[(Versioned Behavioral Baseline)]
+    Logs --> TemporalAnalyzer[TemporalDriftAnalyzer]
+    BaselineRecord --> TemporalAnalyzer
+    TemporalAnalyzer --> KS[Kolmogorov-Smirnov Test]
+    TemporalAnalyzer --> PSI[Population Stability Index]
+    TemporalAnalyzer --> Welch[Welch t-test]
+    TemporalAnalyzer --> PH[Page-Hinkley Sequential Test]
+    
+    KS --> ValenceClass[Valence & Type Classifier]
+    PSI --> ValenceClass
+    Welch --> ValenceClass
+    PH --> ValenceClass
+    
+    ValenceClass -->|Positive Shift| Improve[Behavioral Improvement]
+    ValenceClass -->|Negative Shift| Deteriorate[Behavioral Deterioration]
+    ValenceClass -->|Input Shift| DataDrift[Data Drift]
+    
+    Logs --> ModelMonitor[ModelPerformanceMonitor]
+    ModelMonitor -->|Rolling MAE & Bias| ConceptDrift[Concept Drift Alert]
+    
+    Improve --> Adapt[AdaptiveDriftCoordinator]
+    Deteriorate --> Adapt
+    ConceptDrift --> RetrainSignal[Candidate Retrain Recommended]
+    Adapt --> UI[Frontend Trends & Habit Change Section]
+```
+
+---
+
+### 12.2 Critical Distinction Between Drift Categories & Behavioral Valence
+A core design requirement is that **the system does NOT automatically interpret every statistical distribution change as a negative event**:
+
+1. **Behavioral Improvement (`positive` valence):**
+   - Sustained reduction in departure delay, lateness rate, preparation underestimation bias, or morning distraction tags.
+   - Evaluated as positive habit formation; highlighted with green visual indicators and positive feedback.
+2. **Behavioral Deterioration (`negative` valence):**
+   - Sustained increase in departure delay, chronic prep underestimation, or spiking item-search delays.
+   - Tagged as emerging routine friction; triggers proactive habit recommendations.
+3. **Data Drift (`neutral` valence):**
+   - Distributional shifts in operational inputs (e.g., changes in planned departure times, weekday distributions, or preparation durations where punctuality is maintained).
+   - Reflects human routine adaptation without implying failure.
+4. **Concept Drift (`negative` valence, model health):**
+   - Changes in the relationship between input features and actual departure delays, diagnosed via **predictive performance degradation** (Rolling MAE rising by $> 30\%$ over baseline MAE and signed prediction bias shifting $> \pm 3$ min).
+
+---
+
+### 12.3 Statistical Detection Methods
+To avoid algorithmic opacity, MicroDelay combines 4 mathematically distinct, validated detectors:
+
+| Method | Type | Primary Use Case & Threshold |
+| :--- | :--- | :--- |
+| **Population Stability Index (PSI)** | Bin-based Distribution | Compares overall quantile bucket stability across comparison windows. $\text{PSI} < 0.10$ (stable), $0.10 \le \text{PSI} < 0.25$ (moderate), $\text{PSI} \ge 0.25$ (significant drift). |
+| **Kolmogorov-Smirnov Test (KS)** | Continuous eCDF Distance | Compares maximum vertical distance $D$ between empirical cumulative distribution functions. Triggers when $p < 0.05$ and $D \ge 0.25$. |
+| **Welch's t-test** | Parametric Hypothesis Test | Evaluates difference in mean values with unequal variances. Detects directional delta and magnitude of shift. |
+| **Page-Hinkley Sequential Test** | Streaming Cumulative Sum | Tracks cumulative deviation $U_t - m_t > \lambda$ over incoming checkout streams. Specifically protects against false alarms from single isolated outliers while detecting persistent step changes. |
+
+---
+
+### 12.4 Multi-Window Temporal Analysis & Outlier Robustness
+The engine analyzes user checkouts across multiple chronological windows:
+- **Recent 7-Day Window ($W_{7d}$):** Captures acute shocks (exam periods, timetable adjustments, vacation return).
+- **Recent 30-Day Window ($W_{30d}$):** Captures sustained medium-term habit shifts (remote work adoption, seasonal patterns).
+- **Sequential Streams:** Evaluates continuous cumulative change over time via Page-Hinkley.
+
+**Guardrails:**
+- **Chronological Safety:** Analysis strictly partitions logs available prior to the evaluation timestamp.
+- **Minimum Sample Requirements:** Requires $\ge 4$ recent checkouts and $\ge 8$ baseline checkouts ($12$ total minimum). Cold-start users return `status: "insufficient_data"` without raising false alerts.
+- **Single Outlier Suppression:** If 1 checkout exhibits an extreme deviation (e.g., 45-minute delay due to a blown car tire) but the median of the recent window matches baseline, the engine suppresses statistical drift alerts.
+
+---
+
+### 12.5 Model Performance Monitoring vs Input Drift
+The system strictly decouples input feature evolution from ML model predictive health (`ModelPerformanceMonitor`):
+- **Rolling MAE:** Evaluates absolute delay prediction error over the last $N=8$ checkouts.
+- **Signed Prediction Bias:** Measures whether the model systematically underestimates ($+ \text{bias}$) or overestimates ($- \text{bias}$) departure delays.
+- **Degradation Detection:** If Rolling MAE increases by $\ge 30\%$ above the baseline model MAE and sample size criteria are met, the system flags `performance_degraded = True` and creates a `concept_drift` record.
+- **Responsible Adaptation Policy:** Rather than blindly retraining on every minor distribution change, the active model is strictly preserved until candidate models pass chronological cross-validation.
+
+---
+
+### 12.6 Database Persistence & Schema
+1. **`behavioral_drift_events` (`BehavioralDriftEventRecord`):**
+   - Fields: `drift_event_id`, `user_id`, `feature_name`, `drift_type`, `detection_method`, `baseline_value`, `current_value`, `drift_score`, `p_value`, `severity`, `valence`, `temporal_window`, `sample_count_baseline`, `sample_count_current`, `detected_at`, `status`, `humanized_summary`, `is_statistically_significant`.
+2. **`user_behavioral_baselines` (`UserBehavioralBaselineRecord`):**
+   - Stores versioned baseline metrics (`mean`, `std`, `median`, `q25`, `q75`, `count`) across all 7 monitored behavioral dimensions.
+3. **`model_monitoring_logs` (`ModelMonitoringLogRecord`):**
+   - Tracks sequential predictive error evaluations, rolling MAE, signed bias, degradation percentage, and retrain recommendations.
+
+---
+
+### 12.7 REST API Endpoints & Frontend Experience
+- **Backend Endpoints (`backend/main.py`):**
+  - `GET /api/intelligence/drift/analysis`: Multi-window temporal drift diagnosis.
+  - `GET /api/intelligence/drift/events`: List diagnosed drift events with optional status filtering.
+  - `POST /api/intelligence/drift/events/{id}/acknowledge`: Acknowledge or dismiss an active drift event.
+  - `GET /api/intelligence/drift/model-monitoring`: Inspect rolling MAE, signed bias, and degradation status.
+  - `POST /api/intelligence/drift/recalibrate`: Force baseline recomputation and profile refresh.
+- **Frontend UI (`frontend/src/App.tsx` & `frontend/src/index.css`):**
+  - **Behavioral Drift Panel:** Embedded in the Behavioral Profile view with status indicator (Positive Progress / Routine Friction / Stable), Recalibrate Baseline button, and sub-tab filters.
+  - **Event Cards:** Color-coded by valence (Green for Improvement, Red for Friction, Purple for Shift) with statistical rigor badges (*"Statistically Verified ($p < 0.05$ / PSI $\ge 0.25$)"* vs *"Descriptive Trend ($n < 10$)"*), detection method tag, and baseline-to-current metric comparison.
+  - **Predictive Model Health Tab:** Dedicated card comparing Input Stability with Predictive Accuracy, displaying Rolling MAE, Signed Bias, and Model Status.
+  - **Dashboard Spotlight:** Real-time habit trend banner alerting users to sustained improvements or emerging departure friction.
+
+

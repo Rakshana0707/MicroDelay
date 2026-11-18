@@ -164,6 +164,31 @@ except ModuleNotFoundError:
         INTERVENTION_CAUSATION_DISCLAIMER
     )
 
+try:
+    from ml.drift import (
+        calculate_psi,
+        calculate_ks_test,
+        calculate_welch_ttest,
+        PageHinkleyDetector,
+        BehavioralBaselineService,
+        TemporalDriftAnalyzer,
+        ModelPerformanceMonitor,
+        AdaptiveDriftCoordinator,
+        classify_drift_type_and_valence
+    )
+except ModuleNotFoundError:
+    from backend.ml.drift import (
+        calculate_psi,
+        calculate_ks_test,
+        calculate_welch_ttest,
+        PageHinkleyDetector,
+        BehavioralBaselineService,
+        TemporalDriftAnalyzer,
+        ModelPerformanceMonitor,
+        AdaptiveDriftCoordinator,
+        classify_drift_type_and_valence
+    )
+
 __all__ = [
     "ValidationConfig",
     "ValidationReport",
@@ -236,5 +261,14 @@ __all__ = [
     "AdaptivePrioritizer",
     "EffectivenessMeasurementService",
     "InterventionService",
-    "INTERVENTION_CAUSATION_DISCLAIMER"
+    "INTERVENTION_CAUSATION_DISCLAIMER",
+    "calculate_psi",
+    "calculate_ks_test",
+    "calculate_welch_ttest",
+    "PageHinkleyDetector",
+    "BehavioralBaselineService",
+    "TemporalDriftAnalyzer",
+    "ModelPerformanceMonitor",
+    "AdaptiveDriftCoordinator",
+    "classify_drift_type_and_valence"
 ]

@@ -1135,6 +1135,114 @@ def get_user_intervention_effectiveness(db: Session, user_id: int, intervention_
     return InterventionService.get_intervention_effectiveness(db, user_id, intervention_id)
 
 
+# =====================================================================
+# Behavioral Drift Detection & Monitoring Wrappers (Prompt 2.8)
+# =====================================================================
+
+def analyze_user_drift(db: Session, user_id: int) -> dict:
+    """Analyze behavioral drift across recent and historical operational windows."""
+    try:
+        from ml.drift import TemporalDriftAnalyzer
+    except ModuleNotFoundError:
+        from backend.ml.drift import TemporalDriftAnalyzer
+
+    return TemporalDriftAnalyzer.analyze_user_drift(db, user_id)
+
+
+def get_user_drift_events(db: Session, user_id: int, status: Optional[str] = None) -> list:
+    """Retrieve historical drift events for a user with optional status filter."""
+    from database import BehavioralDriftEventRecord
+
+    query = db.query(BehavioralDriftEventRecord).filter(
+        BehavioralDriftEventRecord.user_id == user_id
+    )
+    if status:
+        query = query.filter(BehavioralDriftEventRecord.status == status)
+
+    records = query.order_by(BehavioralDriftEventRecord.id.desc()).all()
+    return [
+        {
+            "drift_event_id": r.drift_event_id,
+            "feature_name": r.feature_name,
+            "drift_type": r.drift_type,
+            "detection_method": r.detection_method,
+            "baseline_value": r.baseline_value,
+            "current_value": r.current_value,
+            "drift_score": r.drift_score,
+            "p_value": r.p_value,
+            "severity": r.severity,
+            "valence": r.valence,
+            "temporal_window": r.temporal_window,
+            "sample_count_baseline": r.sample_count_baseline,
+            "sample_count_current": r.sample_count_current,
+            "detected_at": r.detected_at,
+            "status": r.status,
+            "humanized_summary": r.humanized_summary,
+            "is_statistically_significant": r.is_statistically_significant
+        }
+        for r in records
+    ]
+
+
+def acknowledge_user_drift_event(
+    db: Session,
+    user_id: int,
+    drift_event_id: str,
+    new_status: str = "acknowledged"
+) -> dict:
+    """Update status of a drift event with strict user isolation."""
+    from database import BehavioralDriftEventRecord
+
+    record = db.query(BehavioralDriftEventRecord).filter(
+        BehavioralDriftEventRecord.drift_event_id == drift_event_id,
+        BehavioralDriftEventRecord.user_id == user_id
+    ).first()
+
+    if not record:
+        raise ValueError(f"Drift event '{drift_event_id}' not found or access denied.")
+
+    record.status = new_status
+    db.commit()
+    return {
+        "drift_event_id": record.drift_event_id,
+        "status": record.status,
+        "updated": True
+    }
+
+
+def get_user_model_monitoring(db: Session, user_id: int) -> dict:
+    """Track model prediction accuracy and degradation for authenticated user."""
+    try:
+        from ml.drift import ModelPerformanceMonitor
+    except ModuleNotFoundError:
+        from backend.ml.drift import ModelPerformanceMonitor
+
+    return ModelPerformanceMonitor.monitor_user_model_performance(db, user_id)
+
+
+def recalibrate_user_baseline(db: Session, user_id: int) -> dict:
+    """Manually force recomputation of user behavioral baseline and profile refresh."""
+    try:
+        from ml.drift import BehavioralBaselineService, TemporalDriftAnalyzer
+        from ml.profiling import PersonalizedBehavioralProfiler
+    except ModuleNotFoundError:
+        from backend.ml.drift import BehavioralBaselineService, TemporalDriftAnalyzer
+        from backend.ml.profiling import PersonalizedBehavioralProfiler
+
+    baseline = BehavioralBaselineService.get_or_create_user_baseline(db, user_id, force_recompute=True)
+    profile = PersonalizedBehavioralProfiler.get_or_create_profile(user_id, db, force_refresh=True)
+    drift = TemporalDriftAnalyzer.analyze_user_drift(db, user_id)
+
+    return {
+        "success": True,
+        "baseline_generated": baseline is not None,
+        "baseline_version": baseline.baseline_version if baseline else None,
+        "profile_refreshed": profile is not None,
+        "drift_events_detected": len(drift.get("events_detected", []))
+    }
+
+
+
 
 
 

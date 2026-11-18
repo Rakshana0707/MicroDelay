@@ -245,6 +245,72 @@ class UserInterventionRecord(Base):
     user = relationship("User", backref="interventions")
 
 
+class BehavioralDriftEventRecord(Base):
+    """Stores diagnosed behavioral, data, and concept drift events."""
+    __tablename__ = "behavioral_drift_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    drift_event_id = Column(String, unique=True, nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    feature_name = Column(String, nullable=False)
+    drift_type = Column(String, nullable=False)  # "data_drift", "concept_drift", "behavioral_improvement", "behavioral_deterioration"
+    detection_method = Column(String, nullable=False)  # "kolmogorov_smirnov", "population_stability_index", "rolling_mean_shift", "page_hinkley"
+    baseline_value = Column(Float, nullable=False)
+    current_value = Column(Float, nullable=False)
+    drift_score = Column(Float, nullable=False)
+    p_value = Column(Float, nullable=True)
+    severity = Column(String, nullable=False)  # "informational", "moderate", "significant"
+    valence = Column(String, nullable=False)  # "positive", "negative", "neutral"
+    temporal_window = Column(String, nullable=False)  # "7d_vs_baseline", "30d_vs_baseline", "sequential_stream"
+    sample_count_baseline = Column(Integer, nullable=False)
+    sample_count_current = Column(Integer, nullable=False)
+    detected_at = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="active")  # "active", "acknowledged", "resolved", "dismissed"
+    humanized_summary = Column(Text, nullable=False)
+    is_statistically_significant = Column(Boolean, nullable=False, default=False)
+
+    user = relationship("User", backref="drift_events")
+
+
+class UserBehavioralBaselineRecord(Base):
+    """Stores versioned historical behavioral baseline distributions for a user."""
+    __tablename__ = "user_behavioral_baselines"
+
+    id = Column(Integer, primary_key=True, index=True)
+    baseline_id = Column(String, unique=True, nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    baseline_version = Column(String, nullable=False, default="v1.0")
+    generated_at = Column(String, nullable=False)
+    observation_count = Column(Integer, nullable=False)
+    historical_window = Column(String, nullable=False, default="all_time")
+    data_provenance = Column(String, nullable=False, default="genuine")  # "genuine", "synthetic", "hybrid"
+    metrics = Column(Text, nullable=False)  # JSON dict of metric -> summary stats
+    is_active = Column(Boolean, nullable=False, default=True)
+
+    user = relationship("User", backref="behavioral_baselines")
+
+
+class ModelMonitoringLogRecord(Base):
+    """Tracks sequential model prediction errors, rolling MAE, bias, and performance degradation."""
+    __tablename__ = "model_monitoring_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    model_version = Column(String, nullable=False)
+    evaluated_at = Column(String, nullable=False)
+    rolling_window_size = Column(Integer, nullable=False)
+    rolling_mae = Column(Float, nullable=False)
+    rolling_bias = Column(Float, nullable=False)
+    baseline_mae = Column(Float, nullable=False)
+    baseline_bias = Column(Float, nullable=False)
+    performance_degraded = Column(Boolean, nullable=False, default=False)
+    degradation_pct = Column(Float, nullable=False, default=0.0)
+    error_distribution_shift = Column(Boolean, nullable=False, default=False)
+    details = Column(Text, nullable=True)  # JSON
+
+    user = relationship("User", backref="model_monitoring_logs")
+
+
 def migrate_db(db_engine=None):
     """Safely migrate SQLite database schema to include provenance fields and backfill legacy records."""
     target_engine = db_engine or engine
@@ -407,6 +473,66 @@ def migrate_db(db_engine=None):
                 user_feedback_notes TEXT,
                 user_helpful BOOLEAN,
                 completion_status VARCHAR
+            )
+        """))
+
+        # Create behavioral_drift_events table if not exists (Prompt 2.8)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS behavioral_drift_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                drift_event_id VARCHAR UNIQUE NOT NULL,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                feature_name VARCHAR NOT NULL,
+                drift_type VARCHAR NOT NULL,
+                detection_method VARCHAR NOT NULL,
+                baseline_value FLOAT NOT NULL,
+                current_value FLOAT NOT NULL,
+                drift_score FLOAT NOT NULL,
+                p_value FLOAT,
+                severity VARCHAR NOT NULL,
+                valence VARCHAR NOT NULL,
+                temporal_window VARCHAR NOT NULL,
+                sample_count_baseline INTEGER NOT NULL,
+                sample_count_current INTEGER NOT NULL,
+                detected_at VARCHAR NOT NULL,
+                status VARCHAR NOT NULL DEFAULT 'active',
+                humanized_summary TEXT NOT NULL,
+                is_statistically_significant BOOLEAN DEFAULT 0
+            )
+        """))
+
+        # Create user_behavioral_baselines table if not exists (Prompt 2.8)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS user_behavioral_baselines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                baseline_id VARCHAR UNIQUE NOT NULL,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                baseline_version VARCHAR NOT NULL DEFAULT 'v1.0',
+                generated_at VARCHAR NOT NULL,
+                observation_count INTEGER NOT NULL,
+                historical_window VARCHAR NOT NULL DEFAULT 'all_time',
+                data_provenance VARCHAR NOT NULL DEFAULT 'genuine',
+                metrics TEXT NOT NULL,
+                is_active BOOLEAN DEFAULT 1
+            )
+        """))
+
+        # Create model_monitoring_logs table if not exists (Prompt 2.8)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS model_monitoring_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                model_version VARCHAR NOT NULL,
+                evaluated_at VARCHAR NOT NULL,
+                rolling_window_size INTEGER NOT NULL,
+                rolling_mae FLOAT NOT NULL,
+                rolling_bias FLOAT NOT NULL,
+                baseline_mae FLOAT NOT NULL,
+                baseline_bias FLOAT NOT NULL,
+                performance_degraded BOOLEAN DEFAULT 0,
+                degradation_pct FLOAT DEFAULT 0.0,
+                error_distribution_shift BOOLEAN DEFAULT 0,
+                details TEXT
             )
         """))
 
